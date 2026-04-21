@@ -255,7 +255,7 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 			const obstacles = await getComponentObstacles(comp, layer);
 			const compRotation = comp.getState_Rotation?.() ?? 0;
 			if (obstacles.designatorBox) {
-				allObstacles.push({ polygon: obstacles.designatorBox, rotation: compRotation, negateBisector: false });
+				allObstacles.push({ polygon: obstacles.designatorBox, rotation: compRotation, negateBisector: true });
 				compDesignator++;
 			}
 			if (obstacles.componentBBox) {
@@ -307,7 +307,7 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 			const copperLayer = layer === LAYER_BOTTOM_SILKSCREEN ? LAYER_BOTTOM_COPPER : LAYER_TOP_COPPER;
 			const textData = await getSilkscreenTextBoxesWithRotation(copperLayer, gap);
 			for (const t of textData) {
-				allObstacles.push({ polygon: t.polygon, rotation: 0, negateBisector: false, extraGap: 0 });
+				allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: false, extraGap: 0 });
 				textCount++;
 				console.warn(TAG, `  Copper text: rot=${t.rotation}, pts=${t.polygon.length}`);
 			}
@@ -321,7 +321,7 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 		try {
 			const textData = await getSilkscreenTextBoxesWithRotation(layer, gap);
 			for (const t of textData) {
-				allObstacles.push({ polygon: t.polygon, rotation: 0, negateBisector: false, extraGap: 0 });
+				allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: true, extraGap: 0 });
 				textCount++;
 				console.warn(TAG, `  Silk text: rot=${t.rotation}, pts=${t.polygon.length}`);
 			}
@@ -644,7 +644,7 @@ export async function drawDynamicFill(): Promise<void> {
 		await eda.sys_IFrame.openIFrame(
 			'/iframe/index.html',
 			320,
-			390,
+			320,
 			IFRAME_ID,
 			{
 				title: '动态丝印填充',

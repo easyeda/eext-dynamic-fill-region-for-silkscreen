@@ -174,13 +174,17 @@
       }
     });
 
-    function resetUI() {
+    function resetDrawingState() {
       drawing = false;
       btn.textContent = '开始绘制';
       btn.className = 'btn';
       gapInput.disabled = false;
       layerTop.disabled = false;
       layerBottom.disabled = false;
+    }
+
+    function resetUI() {
+      resetDrawingState();
       optSelectAll.checked = false;
       optVias.checked = true;
       optPads.checked = true;
@@ -209,7 +213,9 @@
         var s = window.parent.__df_status;
         if (s) {
           delete window.parent.__df_status;
-          if (s.type === 'done' || s.type === 'reset') {
+          if (s.type === 'done') {
+            resetDrawingState();
+          } else if (s.type === 'reset') {
             resetUI();
           }
         }

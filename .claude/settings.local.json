@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/easyeda/.claude/plans/**)",
+      "Bash(touch iridescent-bubbling-mountain-agent-a3deb5b7908321496.md)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(grep -rn \"pcb_Primitive\\\\\\\\.getAll\" \"C:\\\\Users\\\\easyeda\\\\.claude\\\\skills\\\\easyeda-api\\\\references\" --include=\"*.md\")",
+      "Bash(grep -A 30 \"## PCB_Primitive$\" \"C:\\\\Users\\\\easyeda\\\\.claude\\\\skills\\\\easyeda-api\\\\references\\\\_quick-reference.md\")",
+      "Bash(grep -A 20 \"## IPCB_Polygon$\" \"C:\\\\Users\\\\easyeda\\\\.claude\\\\skills\\\\easyeda-api\\\\references\\\\_quick-reference.md\")",
+      "Bash(node:*)",
+      "Bash(curl:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(ls -la \"D:\\\\教程\\\\easyeda-docs\\\\github-eext\\\\eext-dynamic-fill-region-for-silkscreen/\"*.eext)",
+      "Bash(npx tsc:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(npx esbuild:*)"
+    ]
+  }
+}

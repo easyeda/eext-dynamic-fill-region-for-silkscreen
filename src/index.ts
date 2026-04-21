@@ -648,7 +648,7 @@ export async function drawDynamicFill(): Promise<void> {
 		await eda.sys_IFrame.openIFrame(
 			'/iframe/index.html',
 			320,
-			420,
+			450,
 			IFRAME_ID,
 			{
 				title: '动态丝印填充',

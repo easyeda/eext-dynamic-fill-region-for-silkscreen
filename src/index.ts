@@ -93,12 +93,8 @@ async function addPointAtCursor(): Promise<void> {
 				return;
 			}
 		}
-
 		currentPoints.push({ x: pos.x, y: pos.y });
-			eda.sys_Message.showFollowMouseTip('已拾取' + currentPoints.length + '个点，可点击"完成绘制"结束');
-
-			console.warn(TAG, `Point #${currentPoints.length}: (${pos.x}, ${pos.y})`);
-		sendStatus('points', { count: currentPoints.length });
+		console.warn(TAG, `Point #${currentPoints.length}: (${pos.x}, ${pos.y})`);
 	}
 	catch (e) {
 		console.warn(TAG, 'Failed to add point:', e);
@@ -146,7 +142,7 @@ async function pollCommands(): Promise<void> {
 				}
 
 				// 显示 tooltip
-				eda.sys_Message.showFollowMouseTip('请左键点击绘制区域');
+				eda.sys_Message.showFollowMouseTip('请左键点击填充区域的轮廓点');
 			}
 			else if (cmd.type === 'stop') {
 				console.warn(TAG, 'Stop command received');
@@ -155,7 +151,7 @@ async function pollCommands(): Promise<void> {
 				currentPoints = [];
 				await deleteTempFill();
 				cleanupListeners();
-				eda.sys_Message.removeFollowMouseTip('请左键点击绘制区域');
+				eda.sys_Message.removeFollowMouseTip('请左键点击填充区域的轮廓点');
 			}
 			else if (cmd.type === 'finish') {
 				console.warn(TAG, 'Finish polygon command received');
@@ -164,7 +160,7 @@ async function pollCommands(): Promise<void> {
 					if (success) {
 						currentState = 'IDLE';
 						cleanupListeners();
-						eda.sys_Message.removeFollowMouseTip('请左键点击绘制区域');
+						eda.sys_Message.removeFollowMouseTip('请左键点击填充区域的轮廓点');
 					}
 				}
 			}
@@ -648,7 +644,7 @@ export async function drawDynamicFill(): Promise<void> {
 		await eda.sys_IFrame.openIFrame(
 			'/iframe/index.html',
 			320,
-			450,
+			390,
 			IFRAME_ID,
 			{
 				title: '动态丝印填充',
@@ -659,7 +655,7 @@ export async function drawDynamicFill(): Promise<void> {
 						currentPoints = [];
 						deleteTempFill();
 						cleanupListeners();
-						eda.sys_Message.removeFollowMouseTip('请左键点击绘制区域');
+						eda.sys_Message.removeFollowMouseTip('请左键点击填充区域的轮廓点');
 					}
 				},
 				onBeforeCloseCallFn: () => {

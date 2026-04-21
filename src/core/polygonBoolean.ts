@@ -223,8 +223,26 @@ export function subtractHolesFromRegion(
 		resultGeom = difference(regionPoly, ...holePolys);
 	}
 	catch (e) {
-		console.warn(TAG, 'Difference failed, returning original region:', e);
-		return [{ outer: region, holes: [] }];
+		console.warn(TAG, 'Difference with all holes failed, trying incremental approach:', e);
+		// Fallback: add holes one by one, skip those that cause failure
+		resultGeom = regionPoly;
+		let skipped = 0;
+		for (const holePoly of holePolys) {
+			try {
+				resultGeom = difference(resultGeom, holePoly);
+			}
+			catch (e2) {
+				skipped++;
+				console.warn(TAG, 'Skipping hole due to difference failure:', e2);
+			}
+		}
+		if (skipped > 0) {
+			console.warn(TAG, `Skipped ${skipped} hole(s) that caused difference failure`);
+		}
+		// If all holes were skipped, return original region
+		if (resultGeom === regionPoly && skipped === holePolys.length) {
+			return [{ outer: region, holes: [] }];
+		}
 	}
 
 	console.warn(TAG, `Difference returned ${resultGeom.length} polygon(s)`);

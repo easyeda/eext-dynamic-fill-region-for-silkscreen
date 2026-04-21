@@ -45,6 +45,10 @@
       margin-bottom: 4px;
       font-size: 13px;
     }
+    .options-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
     .opt-item input[type="checkbox"] {
       margin: 0;
     }
@@ -82,14 +86,17 @@
   </div>
   <div class="options">
     <div class="options-title">避让对象:</div>
-    <label class="opt-item"><input type="checkbox" id="optVias" checked /> 过孔</label>
-    <label class="opt-item"><input type="checkbox" id="optPads" checked /> 游离焊盘</label>
-    <label class="opt-item"><input type="checkbox" id="optCutouts" checked /> 挖槽区域</label>
-    <label class="opt-item"><input type="checkbox" id="optTextCopper" checked /> 铜层文本</label>
-    <label class="opt-item"><input type="checkbox" id="optTextSilk" checked /> 丝印层文本</label>
-    <label class="opt-item"><input type="checkbox" id="optLinesSilk" checked /> 丝印层线条</label>
-    <label class="opt-item"><input type="checkbox" id="optLinesCopper" checked /> 铜层线条</label>
-    <label class="opt-item"><input type="checkbox" id="optTracksCopper" checked /> 铜层导线</label>
+    <div class="options-grid">
+      <label class="opt-item"><input type="checkbox" id="optSelectAll" /> 全选</label>
+      <label class="opt-item"><input type="checkbox" id="optVias" checked /> 过孔</label>
+      <label class="opt-item"><input type="checkbox" id="optPads" checked /> 游离焊盘</label>
+      <label class="opt-item"><input type="checkbox" id="optCutouts" checked /> 挖槽区域</label>
+      <label class="opt-item"><input type="checkbox" id="optTextSilk" checked /> 丝印层文本</label>
+      <label class="opt-item"><input type="checkbox" id="optLinesSilk" checked /> 丝印层线条</label>
+      <label class="opt-item"><input type="checkbox" id="optTextCopper" /> 铜层文本</label>
+      <label class="opt-item"><input type="checkbox" id="optLinesCopper" /> 铜层线条</label>
+      <label class="opt-item"><input type="checkbox" id="optTracksCopper" /> 铜层导线</label>
+    </div>
   </div>
   <div class="row">
     <button id="btnToggle" class="btn">开始绘制</button>
@@ -102,6 +109,7 @@
     var layerTop = document.getElementById('layerTop');
     var layerBottom = document.getElementById('layerBottom');
 
+    var optSelectAll = document.getElementById('optSelectAll');
     var optVias = document.getElementById('optVias');
     var optPads = document.getElementById('optPads');
     var optCutouts = document.getElementById('optCutouts');
@@ -110,6 +118,18 @@
     var optLinesSilk = document.getElementById('optLinesSilk');
     var optLinesCopper = document.getElementById('optLinesCopper');
     var optTracksCopper = document.getElementById('optTracksCopper');
+
+    optSelectAll.addEventListener('change', function() {
+      var checked = optSelectAll.checked;
+      optVias.checked = checked;
+      optPads.checked = checked;
+      optCutouts.checked = checked;
+      optTextSilk.checked = checked;
+      optLinesSilk.checked = checked;
+      optTextCopper.checked = checked;
+      optLinesCopper.checked = checked;
+      optTracksCopper.checked = checked;
+    });
 
     function startDrawing() {
       var gap = parseFloat(gapInput.value) || 0;
@@ -161,6 +181,15 @@
       gapInput.disabled = false;
       layerTop.disabled = false;
       layerBottom.disabled = false;
+      optSelectAll.checked = false;
+      optVias.checked = true;
+      optPads.checked = true;
+      optCutouts.checked = true;
+      optTextCopper.checked = false;
+      optTextSilk.checked = true;
+      optLinesSilk.checked = true;
+      optLinesCopper.checked = false;
+      optTracksCopper.checked = false;
     }
 
     // Keyboard shortcuts: Enter = finish, Escape = cancel

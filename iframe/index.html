@@ -71,6 +71,11 @@
       border-color: #52c41a;
     }
     .btn.finish:hover { background: #73d13d; }
+    .btn-fill-avoid {
+      background: #fa8c16;
+      border-color: #fa8c16;
+    }
+    .btn-fill-avoid:hover { background: #ffa039; }
   </style>
 </head>
 <body>
@@ -100,6 +105,9 @@
   </div>
   <div class="row">
     <button id="btnToggle" class="btn">开始绘制</button>
+  </div>
+  <div class="row">
+    <button id="btnFillAvoid" class="btn btn-fill-avoid">根据丝印填充避让</button>
   </div>
 
   <script>
@@ -172,6 +180,26 @@
       } else {
         finishDrawing();
       }
+    });
+
+    var btnFillAvoid = document.getElementById('btnFillAvoid');
+    btnFillAvoid.addEventListener('click', function() {
+      var gap = parseFloat(gapInput.value) || 0;
+      if (gap < 0) gap = 0;
+      window.parent.__df_cmd = {
+        type: 'fillAvoid',
+        gap: gap,
+        options: {
+          vias: optVias.checked,
+          pads: optPads.checked,
+          cutouts: optCutouts.checked,
+          textCopper: optTextCopper.checked,
+          textSilk: optTextSilk.checked,
+          linesSilk: optLinesSilk.checked,
+          linesCopper: optLinesCopper.checked,
+          tracksCopper: optTracksCopper.checked
+        }
+      };
     });
 
     function resetDrawingState() {

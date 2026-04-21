@@ -111,7 +111,8 @@ async function pollCommands(): Promise<void> {
 			delete _g.__df_cmd;
 
 			if (cmd.type === 'start') {
-				eda.sys_Message.showFollowMouseTip('请左键点击填充区域的轮廓点', 60000);
+				eda.sys_Message.showFollowMouseTip('请左键点击3个及以上轮廓点', 60000);
+				eda.sys_Message.showToastMessage('请左键点击3个及以上轮廓点', 'info', 3000);
 				console.warn(TAG, `Start command received, gap=${cmd.gap}`);
 
 				currentGap = cmd.gap || 0;
@@ -167,10 +168,171 @@ async function pollCommands(): Promise<void> {
 					}
 				}
 			}
+			else if (cmd.type === 'fillAvoid') {
+				eda.sys_Message.showToastMessage('正在处理填充避让...', 'info', 3000);
+				const success = await handleFillAvoid(cmd.gap, cmd.options);
+				if (success) {
+					eda.sys_Message.showToastMessage('填充避让完成', 'info', 2000);
+				}
+			}
 		}
 	}
 	catch (e) {
 		console.warn(TAG, 'Poll error:', e);
+	}
+}
+
+/**
+ * 根据选中填充区域进行避让填充
+ */
+async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<boolean> {
+	try {
+		// 获取选中的图元
+		const selectedPrimitives = await eda.pcb_SelectControl.getAllSelectedPrimitives();
+		if (!selectedPrimitives || selectedPrimitives.length === 0) {
+			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'warning', 3000);
+			return false;
+		}
+
+		// 找到选中的丝印层填充
+		let selectedFill: any = null;
+		let fillLayer = 0;
+
+		for (const prim of selectedPrimitives) {
+			if (!prim)
+				continue;
+			// 检查是否是填充图元
+			const layer = prim.getState_Layer?.();
+			if (layer === LAYER_TOP_SILKSCREEN || layer === LAYER_BOTTOM_SILKSCREEN) {
+				// 检查是否是填充类型
+				const stateType = prim.getState_Type?.();
+				if (stateType === 11 || stateType === 'FILL' || prim.constructor?.name?.includes('Fill')) {
+					selectedFill = prim;
+					fillLayer = layer;
+					break;
+				}
+			}
+		}
+
+		if (!selectedFill) {
+			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'warning', 3000);
+			return false;
+		}
+
+		console.warn(TAG, `Found selected fill on layer ${fillLayer}`);
+
+		// 获取填充的多边形数据
+		let polygonSourceArray: (number | string)[] | null = null;
+		try {
+			polygonSourceArray = await selectedFill.getState_PolygonSourceArray?.();
+		}
+		catch (e) {
+			console.warn(TAG, 'Failed to get PolygonSourceArray, trying getComplex:', e);
+		}
+
+		if (!polygonSourceArray) {
+			eda.sys_Message.showToastMessage('无法获取填充区域几何数据', 'warning', 3000);
+			return false;
+		}
+
+		// 转换为 Point[]
+		const fillPoints = sourceArrayToPoints(polygonSourceArray);
+		if (fillPoints.length < 3) {
+			eda.sys_Message.showToastMessage('填充区域几何数据无效', 'warning', 3000);
+			return false;
+		}
+
+		console.warn(TAG, `Fill has ${fillPoints.length} polygon points`);
+
+		// 收集障碍物（使用选中填充的层）
+		const allObstacles = await collectAllObstacles(fillLayer, options, gap);
+
+		// 转换为 Point[]
+		const obstaclePoints: Point[][] = [];
+		const obstacleRotations: number[] = [];
+		const obstacleNegateBisector: boolean[] = [];
+		const obstacleExtraGaps: number[] = [];
+		for (const obs of allObstacles) {
+			try {
+				const pts = sourceArrayToPoints(obs.polygon);
+				if (pts.length >= 3) {
+					obstaclePoints.push(pts);
+					obstacleRotations.push(obs.rotation);
+					obstacleNegateBisector.push(obs.negateBisector);
+					obstacleExtraGaps.push(obs.extraGap ?? gap);
+				}
+			}
+			catch (e) { /* skip */ }
+		}
+
+		// 布尔差运算：填充区域减去障碍物
+		let results: { outer: Point[]; holes: Point[][] }[] = [];
+		if (obstaclePoints.length === 0) {
+			results = [{ outer: fillPoints, holes: [] }];
+		}
+		else {
+			// 对障碍物进行外扩
+			const offsetPoints: Point[][] = [];
+			for (let i = 0; i < obstaclePoints.length; i++) {
+				const pts = obstaclePoints[i];
+				const rotation = obstacleRotations[i];
+				const negateBisector = obstacleNegateBisector[i];
+				const extraGap = obstacleExtraGaps[i];
+				const ccwPts = ensureCounterClockwise(pts);
+
+				let offset: Point[];
+				if (extraGap > 0 && Math.abs(rotation) > 0.01) {
+					offset = offsetPolygonPoints(ccwPts, extraGap, rotation, negateBisector);
+				}
+				else {
+					offset = offsetPolygonPoints(ccwPts, extraGap, 0, negateBisector);
+				}
+				offsetPoints.push(offset);
+			}
+
+			// 收集所有外扩后的洞
+			const holes = offsetPoints.filter(p => p.length >= 3);
+			console.warn(TAG, `Using ${holes.length} holes for boolean operation`);
+
+			// 执行布尔差运算
+			const regionOuter = ensureClockwise(fillPoints);
+			results = subtractHolesFromRegion(regionOuter, holes);
+			console.warn(TAG, `Boolean result: ${results.length} polygon(s)`);
+		}
+
+		// 删除原填充
+		const fillId = selectedFill.getState_PrimitiveId?.();
+		if (fillId) {
+			await eda.pcb_Primitive.delete(fillId);
+			console.warn(TAG, `Deleted original fill: ${fillId}`);
+		}
+
+		// 创建新填充
+		let created = 0;
+		for (const result of results) {
+			try {
+				const outerSource = pointsToSourceArray(ensureClockwise(result.outer));
+				const holeSources = result.holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
+				const complexPolyArray = [outerSource, ...holeSources];
+
+				const fill = await createFillPrimitiveWithFix(fillLayer, complexPolyArray);
+				if (fill) {
+					created++;
+				}
+			}
+			catch (e) {
+				console.warn(TAG, 'Failed to create fill for sub-polygon:', e);
+			}
+		}
+
+		console.warn(TAG, `Created ${created} fill(s)`);
+		eda.sys_Message.showToastMessage(`填充避让完成：创建了 ${created} 个填充`, 'info', 3000);
+		return created > 0;
+	}
+	catch (e) {
+		console.error(TAG, 'handleFillAvoid failed:', e);
+		eda.sys_Message.showToastMessage(`错误: ${e instanceof Error ? e.message : String(e)}`, 'error', 3000);
+		return false;
 	}
 }
 

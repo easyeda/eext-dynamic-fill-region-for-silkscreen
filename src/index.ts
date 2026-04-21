@@ -95,8 +95,9 @@ async function addPointAtCursor(): Promise<void> {
 		}
 
 		currentPoints.push({ x: pos.x, y: pos.y });
+			eda.sys_Message.showFollowMouseTip('已拾取' + currentPoints.length + '个点，可点击"完成绘制"结束');
 
-		console.warn(TAG, `Point #${currentPoints.length}: (${pos.x}, ${pos.y})`);
+			console.warn(TAG, `Point #${currentPoints.length}: (${pos.x}, ${pos.y})`);
 		sendStatus('points', { count: currentPoints.length });
 	}
 	catch (e) {
@@ -118,7 +119,9 @@ async function pollCommands(): Promise<void> {
 
 				currentGap = cmd.gap || 0;
 				currentOptions = cmd.options || { vias: true, pads: true, cutouts: true, textCopper: true, textSilk: true, linesSilk: true, linesCopper: true, tracksCopper: true };
+				targetLayer = cmd.layer ?? LAYER_TOP_SILKSCREEN;
 				console.warn(TAG, `Options: linesSilk=${currentOptions.linesSilk}, linesCopper=${currentOptions.linesCopper}, tracksCopper=${currentOptions.tracksCopper}`);
+				console.warn(TAG, `Target layer: ${targetLayer === LAYER_TOP_SILKSCREEN ? 'TOP' : 'BOTTOM'} silkscreen`);
 				currentPoints = [];
 				currentState = 'DRAWING';
 				tempFillId = null;
@@ -142,9 +145,8 @@ async function pollCommands(): Promise<void> {
 					console.warn(TAG, 'Failed to register mouse listener:', e);
 				}
 
-				// 显示 tooltip 一次
-				eda.sys_Message.showFollowMouseTip('点击画布拾取点 | Enter完成 | Esc取消');
-				sendStatus('status', { text: '绘制中 - 点击拾取点，完成绘制结束' });
+				// 显示 tooltip
+				eda.sys_Message.showFollowMouseTip('请左键点击绘制区域');
 			}
 			else if (cmd.type === 'stop') {
 				console.warn(TAG, 'Stop command received');
@@ -153,8 +155,7 @@ async function pollCommands(): Promise<void> {
 				currentPoints = [];
 				await deleteTempFill();
 				cleanupListeners();
-				eda.sys_Message.removeFollowMouseTip('点击画布拾取点 | Enter完成 | Esc取消');
-				sendStatus('reset');
+				eda.sys_Message.removeFollowMouseTip('请左键点击绘制区域');
 			}
 			else if (cmd.type === 'finish') {
 				console.warn(TAG, 'Finish polygon command received');
@@ -163,7 +164,7 @@ async function pollCommands(): Promise<void> {
 					if (success) {
 						currentState = 'IDLE';
 						cleanupListeners();
-						eda.sys_Message.removeFollowMouseTip('点击画布拾取点 | Enter完成 | Esc取消');
+						eda.sys_Message.removeFollowMouseTip('请左键点击绘制区域');
 					}
 				}
 			}
@@ -642,15 +643,12 @@ export async function drawDynamicFill(): Promise<void> {
 			return;
 		}
 
-		// 自动检测目标丝印层
-		targetLayer = await detectTargetSilkscreenLayer();
-		console.warn(TAG, `Target layer detected: ${targetLayer === LAYER_TOP_SILKSCREEN ? 'TOP' : 'BOTTOM'} silkscreen`);
 		fillCount = 0;
 
 		await eda.sys_IFrame.openIFrame(
 			'/iframe/index.html',
 			320,
-			360,
+			420,
 			IFRAME_ID,
 			{
 				title: '动态丝印填充',
@@ -661,7 +659,7 @@ export async function drawDynamicFill(): Promise<void> {
 						currentPoints = [];
 						deleteTempFill();
 						cleanupListeners();
-						eda.sys_Message.removeFollowMouseTip('点击画布拾取点 | Enter完成 | Esc取消');
+						eda.sys_Message.removeFollowMouseTip('请左键点击绘制区域');
 					}
 				},
 				onBeforeCloseCallFn: () => {

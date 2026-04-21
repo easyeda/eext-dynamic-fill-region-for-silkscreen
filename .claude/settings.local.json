@@ -15,7 +15,16 @@
       "Bash(npx tsc:*)",
       "Bash(npm uninstall:*)",
       "Bash(echo \"Exit: $?\")",
-      "Bash(npx esbuild:*)"
+      "Bash(npx esbuild:*)",
+      "Bash(sed -n '640,650p' src/index.ts)",
+      "Bash(sed -n '117,125p' src/index.ts)",
+      "Bash(unzip -l build/dist/dynamic-fill-region-for-silkscreen_v1.0.0.eext)",
+      "Bash(unzip -p build/dist/dynamic-fill-region-for-silkscreen_v1.0.0.eext iframe/index.html)",
+      "Bash(sed -n '648,655p' src/index.ts)",
+      "Bash(sed -n '145,152p' src/index.ts)",
+      "Bash(sed -n '94,102p' src/index.ts)",
+      "Bash(sed -n '144,150p' src/index.ts)",
+      "Bash(sed -n '649,655p' src/index.ts)"
     ]
   }
 }

@@ -75,6 +75,11 @@
     <input type="number" id="gap" value="10" min="0" max="1000" />
     <span>mil</span>
   </div>
+  <div class="row">
+    <label>层:</label>
+    <label><input type="radio" name="layer" id="layerTop" value="3" checked /> 顶层丝印</label>
+    <label><input type="radio" name="layer" id="layerBottom" value="4" /> 底层丝印</label>
+  </div>
   <div class="options">
     <div class="options-title">避让对象:</div>
     <label class="opt-item"><input type="checkbox" id="optVias" checked /> 过孔</label>
@@ -94,6 +99,8 @@
     var drawing = false;
     var btn = document.getElementById('btnToggle');
     var gapInput = document.getElementById('gap');
+    var layerTop = document.getElementById('layerTop');
+    var layerBottom = document.getElementById('layerBottom');
 
     var optVias = document.getElementById('optVias');
     var optPads = document.getElementById('optPads');
@@ -107,9 +114,11 @@
     function startDrawing() {
       var gap = parseFloat(gapInput.value) || 0;
       if (gap < 0) gap = 0;
+      var layer = parseInt(document.querySelector('input[name="layer"]:checked').value);
       window.parent.__df_cmd = {
         type: 'start',
         gap: gap,
+        layer: layer,
         options: {
           vias: optVias.checked,
           pads: optPads.checked,
@@ -125,6 +134,8 @@
       btn.textContent = '完成绘制';
       btn.className = 'btn finish';
       gapInput.disabled = true;
+      layerTop.disabled = true;
+      layerBottom.disabled = true;
     }
 
     function finishDrawing() {
@@ -148,6 +159,8 @@
       btn.textContent = '开始绘制';
       btn.className = 'btn';
       gapInput.disabled = false;
+      layerTop.disabled = false;
+      layerBottom.disabled = false;
     }
 
     // Keyboard shortcuts: Enter = finish, Escape = cancel

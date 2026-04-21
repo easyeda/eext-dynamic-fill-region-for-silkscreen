@@ -111,6 +111,7 @@ async function pollCommands(): Promise<void> {
 			delete _g.__df_cmd;
 
 			if (cmd.type === 'start') {
+				eda.sys_Message.showFollowMouseTip('请左键点击填充区域的轮廓点', 60000);
 				console.warn(TAG, `Start command received, gap=${cmd.gap}`);
 
 				currentGap = cmd.gap || 0;
@@ -131,7 +132,12 @@ async function pollCommands(): Promise<void> {
 							if (currentState !== 'DRAWING')
 								return;
 							if (eventType === 'selected') {
-								await addPointAtCursor();
+								try {
+									await addPointAtCursor();
+								}
+								catch (e) {
+									console.warn(TAG, 'Mouse event error:', e);
+								}
 							}
 						},
 					);
@@ -140,9 +146,6 @@ async function pollCommands(): Promise<void> {
 				catch (e) {
 					console.warn(TAG, 'Failed to register mouse listener:', e);
 				}
-
-				// 显示 tooltip
-				eda.sys_Message.showFollowMouseTip('请左键点击填充区域的轮廓点');
 			}
 			else if (cmd.type === 'stop') {
 				console.warn(TAG, 'Stop command received');

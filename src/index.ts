@@ -302,11 +302,12 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 
 			// AABB 预过滤 — 只保留与填充区域相交的洞
 			const fillBB = calculateBoundingBox(fillPoints);
+			const maxExtraGap = obstacleExtraGaps.length > 0 ? Math.max(...obstacleExtraGaps) : gap;
 			const fillBBExpanded = {
-				minX: fillBB.minX - gap,
-				minY: fillBB.minY - gap,
-				maxX: fillBB.maxX + gap,
-				maxY: fillBB.maxY + gap,
+				minX: fillBB.minX - maxExtraGap,
+				minY: fillBB.minY - maxExtraGap,
+				maxX: fillBB.maxX + maxExtraGap,
+				maxY: fillBB.maxY + maxExtraGap,
 			};
 			const holes = allHoles.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
 			console.warn(TAG, 'handleFillAvoid: AABB filter', allHoles.length, '→', holes.length, 'holes');
@@ -462,23 +463,26 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 		getRegionPolygons().catch((e) => { console.warn(TAG, 'getRegions failed:', e); return []; }),
 	]);
 
-	// 处理组件（含位号）— 每个组件仍需串行调用 getComponentObstacles
+	// 处理组件（含位号）— 并行获取所有组件障碍物
+	const componentObstacleResults = await Promise.all(
+		components.map(comp =>
+			getComponentObstacles(comp, layer).catch((e) => {
+				console.warn(TAG, 'Failed to get component obstacles:', e);
+				return { designatorBox: null, componentBBox: null, silkscreenShapes: [] };
+			}),
+		),
+	);
 	let compDesignator = 0; let compBBox = 0;
-	for (const comp of components) {
-		try {
-			const obstacles = await getComponentObstacles(comp, layer);
-			const compRotation = comp.getState_Rotation?.() ?? 0;
-			if (obstacles.designatorBox) {
-				allObstacles.push({ polygon: obstacles.designatorBox, rotation: compRotation, negateBisector: true });
-				compDesignator++;
-			}
-			if (obstacles.componentBBox) {
-				allObstacles.push({ polygon: obstacles.componentBBox, rotation: compRotation, negateBisector: false });
-				compBBox++;
-			}
+	for (let ci = 0; ci < components.length; ci++) {
+		const obstacles = componentObstacleResults[ci];
+		const compRotation = components[ci].getState_Rotation?.() ?? 0;
+		if (obstacles.designatorBox) {
+			allObstacles.push({ polygon: obstacles.designatorBox, rotation: compRotation, negateBisector: true });
+			compDesignator++;
 		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get component obstacles:', e);
+		if (obstacles.componentBBox) {
+			allObstacles.push({ polygon: obstacles.componentBBox, rotation: compRotation, negateBisector: false });
+			compBBox++;
 		}
 	}
 	console.warn(TAG, `Components: ${components.length} comps, ${compDesignator} designators, ${compBBox} bboxes`);
@@ -614,11 +618,12 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 
 		// 步骤 5：AABB 预过滤 — 只保留与用户多边形相交的洞
 		const regionBB = calculateBoundingBox(userPoints);
+		const maxExtraGap = obstacleExtraGaps.length > 0 ? Math.max(...obstacleExtraGaps) : gap;
 		const regionBBExpanded = {
-			minX: regionBB.minX - gap,
-			minY: regionBB.minY - gap,
-			maxX: regionBB.maxX + gap,
-			maxY: regionBB.maxY + gap,
+			minX: regionBB.minX - maxExtraGap,
+			minY: regionBB.minY - maxExtraGap,
+			maxX: regionBB.maxX + maxExtraGap,
+			maxY: regionBB.maxY + maxExtraGap,
 		};
 		const filteredOffsetPoints = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
 		console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${filteredOffsetPoints.length} holes (region expanded by ${gap})`);

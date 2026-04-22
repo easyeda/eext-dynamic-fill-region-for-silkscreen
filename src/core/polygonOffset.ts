@@ -232,7 +232,7 @@ export interface ObstacleForOffset {
 export function offsetObstacles(obstacles: ObstacleForOffset[]): Point[][] {
 	return obstacles.map((obs) => {
 		const ccwPts = ensureCounterClockwise(obs.points);
-		const rotation = Math.abs(obs.rotation) > 0.01 ? obs.rotation : 0;
+		const rotation = obs.extraGap > 0 && Math.abs(obs.rotation) > 0.01 ? obs.rotation : 0;
 		return offsetPolygonPoints(ccwPts, obs.extraGap, rotation, obs.negateBisector);
 	});
 }

@@ -7,7 +7,7 @@
 
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
-import { getAllComponents, getComponentObstacles, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxes, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
+import { getAllComponents, getComponentObstacles, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
 import { mergeOverlappingObstacles, subtractHolesFromRegion, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
 import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';
@@ -302,7 +302,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 
 			// AABB 预过滤 — 只保留与填充区域相交的洞
 			const fillBB = calculateBoundingBox(fillPoints);
-			const maxExtraGap = obstacleExtraGaps.length > 0 ? Math.max(...obstacleExtraGaps) : gap;
+			const maxExtraGap = Math.max(...obstacleExtraGaps, gap);
 			const fillBBExpanded = {
 				minX: fillBB.minX - maxExtraGap,
 				minY: fillBB.minY - maxExtraGap,
@@ -618,7 +618,7 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 
 		// 步骤 5：AABB 预过滤 — 只保留与用户多边形相交的洞
 		const regionBB = calculateBoundingBox(userPoints);
-		const maxExtraGap = obstacleExtraGaps.length > 0 ? Math.max(...obstacleExtraGaps) : gap;
+		const maxExtraGap = Math.max(...obstacleExtraGaps, gap);
 		const regionBBExpanded = {
 			minX: regionBB.minX - maxExtraGap,
 			minY: regionBB.minY - maxExtraGap,

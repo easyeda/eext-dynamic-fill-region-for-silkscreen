@@ -77,7 +77,10 @@ export function mergeOverlappingObstacles(
 			parent[ra] = rb;
 	}
 
-	// Pairwise intersection detection — pure AABB check (fast, no polyclip call)
+	// Pairwise intersection detection — AABB check for grouping
+	// Note: AABB overlap is conservative (may group non-overlapping circles/capsules),
+	// but the subsequent chain union handles this correctly — union of non-overlapping
+	// polygons simply returns them as separate polygons in the result.
 	for (let i = 0; i < n; i++) {
 		for (let j = i + 1; j < n; j++) {
 			if (aabbIntersects(bboxes[i], bboxes[j])) {

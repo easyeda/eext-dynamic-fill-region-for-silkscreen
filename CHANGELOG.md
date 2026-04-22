@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.0] - 2026-04-22
+
+### 性能优化
+- **AABB 预过滤**：偏移后只保留与用户多边形相交的洞，大幅减少布尔运算输入（典型场景减少90%+）
+- **并行化障碍物收集**：`collectAllObstacles()` 中所有独立 `getAll()` 调用改为 `Promise.all()` 并发执行，组件障碍物也并行获取
+- **恢复合并重叠障碍物**：用纯 AABB 检测替代 polyclip union 测试，合并后再做差集，减少布尔运算复杂度
+- **分批布尔运算**：`subtractHolesFromRegionIncremental()` 每批20个洞，批间 `setTimeout(0)` 让出主线程，UI 不再卡死并显示进度
+
+### 重构
+- 提取 `offsetObstacles()` 共享函数，消除两处重复的偏移循环
+
 ## [1.2.0] - 2026-04-22
 
 ### Added

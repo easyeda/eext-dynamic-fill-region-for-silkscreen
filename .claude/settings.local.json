@@ -26,7 +26,11 @@
       "Bash(sed -n '144,150p' src/index.ts)",
       "Bash(sed -n '649,655p' src/index.ts)",
       "Bash(rm \"D:/教程/easyeda-docs/github-eext/eext-dynamic-fill-region-for-silkscreen-1/fix.js\")",
-      "Bash(ls build/dist/*.eext)"
+      "Bash(ls build/dist/*.eext)",
+      "Bash(xxd)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

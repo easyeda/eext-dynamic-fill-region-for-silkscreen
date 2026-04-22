@@ -111,7 +111,7 @@ async function pollCommands(): Promise<void> {
 			delete _g.__df_cmd;
 
 			if (cmd.type === 'start') {
-				eda.sys_Message.showFollowMouseTip('请左键点击3个及以上轮廓点', 3000);
+				eda.sys_Message.showToastMessage('请左键点击3个及以上轮廓点', 'info', 3);
 				eda.sys_Message.showToastMessage('请左键点击3个及以上轮廓点', 'info', 3);
 				console.warn(TAG, `Start command received, gap=${cmd.gap}`);
 
@@ -155,7 +155,6 @@ async function pollCommands(): Promise<void> {
 				currentPoints = [];
 				await deleteTempFill();
 				cleanupListeners();
-				eda.sys_Message.removeFollowMouseTip('请左键点击填充区域的轮廓点');
 			}
 			else if (cmd.type === 'finish') {
 				console.warn(TAG, 'Finish polygon command received');
@@ -164,7 +163,6 @@ async function pollCommands(): Promise<void> {
 					if (success) {
 						currentState = 'IDLE';
 						cleanupListeners();
-						eda.sys_Message.removeFollowMouseTip('请左键点击填充区域的轮廓点');
 					}
 				}
 			}
@@ -289,42 +287,39 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 			results = [{ outer: fillPoints, holes: [] }];
 		}
 		else {
-			// 对障碍物进行外扩
-			const offsetPoints = offsetObstacles(obstaclePoints.map((pts, i) => ({
+			// 步骤3：先裁剪到填充区域内（符合PRD流程：先裁剪再外扩）
+			const fillRegionCW = ensureClockwise(fillPoints);
+			const clippedObstacles = clipObstaclesToRegion(obstaclePoints, fillRegionCW);
+			console.warn(TAG, 'handleFillAvoid: Clip to region', obstaclePoints.length, '→', clippedObstacles.length, 'obstacles');
+
+			// 步骤4：对裁剪后的障碍物进行外扩
+			const offsetPoints = offsetObstacles(clippedObstacles.map((pts, i) => ({
 				points: pts,
-				rotation: obstacleRotations[i],
-				negateBisector: obstacleNegateBisector[i],
-				extraGap: obstacleExtraGaps[i],
+				rotation: obstacleRotations[i] ?? 0,
+				negateBisector: obstacleNegateBisector[i] ?? false,
+				extraGap: obstacleExtraGaps[i] ?? gap,
 			})));
 
-			// 收集所有外扩后的洞
-			const allHoles = offsetPoints.filter(p => p.length >= 3);
-
-			// AABB 预过滤 — 只保留与填充区域相交的洞
+			// 步骤5：AABB 预过滤
 			const fillBB = calculateBoundingBox(fillPoints);
-			const maxExtraGap = Math.max(...obstacleExtraGaps, gap);
+			const maxExtraGap = Math.max(...(clippedObstacles.map((_, i) => obstacleExtraGaps[i] ?? gap)), gap);
 			const fillBBExpanded = {
 				minX: fillBB.minX - maxExtraGap,
 				minY: fillBB.minY - maxExtraGap,
 				maxX: fillBB.maxX + maxExtraGap,
 				maxY: fillBB.maxY + maxExtraGap,
 			};
-			const aabbFiltered = allHoles.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
-			console.warn(TAG, 'handleFillAvoid: AABB filter', allHoles.length, '→', aabbFiltered.length, 'holes');
+			const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
+			console.warn(TAG, 'handleFillAvoid: AABB filter', offsetPoints.length, '→', aabbFiltered.length, 'holes');
 
-			// 裁剪到填充区域内（精确裁剪）
-			const clippedHoles = clipObstaclesToRegion(aabbFiltered, fillPoints);
-			console.warn(TAG, 'handleFillAvoid: Clip to region', aabbFiltered.length, '→', clippedHoles.length, 'holes');
+			// 步骤5b：合并重叠洞
+			const mergedHoles = mergeOverlappingObstacles(aabbFiltered);
+			console.warn(TAG, 'handleFillAvoid: Merge', aabbFiltered.length, '→', mergedHoles.length, 'holes');
 
-			// 合并重叠洞
-			const mergedHoles = mergeOverlappingObstacles(clippedHoles);
-			console.warn(TAG, 'handleFillAvoid: Merge', clippedHoles.length, '→', mergedHoles.length, 'holes');
-
-			// 执行布尔差运算
-			const regionOuter = ensureClockwise(fillPoints);
+			// 步骤6：执行布尔差运算
 			results = await subtractHolesFromRegionIncremental(
-				regionOuter, mergedHoles,
-				(done, total) => eda.sys_Message.showFollowMouseTip(`正在布尔运算... (${done}/${total})`),
+				fillRegionCW, mergedHoles,
+				(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, 'info', 3),
 			);
 			console.warn(TAG, 'handleFillAvoid: Boolean result:', results.length, 'polygon(s)');
 		}
@@ -370,14 +365,14 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
  */
 async function finishCurrentPolygon(): Promise<boolean> {
 	if (currentPoints.length < 3) {
-		eda.sys_Message.showFollowMouseTip('至少需要3个点才能完成多边形', 3000);
+		eda.sys_Message.showToastMessage('至少需要3个点才能完成多边形', 'info', 3);
 		return false;
 	}
 
 	const points = [...currentPoints];
 	currentPoints = [];
 
-	eda.sys_Message.showFollowMouseTip('正在收集障碍物...');
+	eda.sys_Message.showToastMessage('正在收集障碍物...', 'info', 3);
 
 	try {
 		// 1. 创建临时填充（用户绘制的原始多边形）
@@ -385,7 +380,7 @@ async function finishCurrentPolygon(): Promise<boolean> {
 		const outerSource = pointsToSourceArray(outerPoints);
 		const tempComplex = eda.pcb_MathPolygon.createComplexPolygon([outerSource] as any);
 		if (!tempComplex) {
-			eda.sys_Message.showFollowMouseTip('错误: 无法构建多边形', 3000);
+			eda.sys_Message.showToastMessage('错误: 无法构建多边形', 'error', 3);
 			return false;
 		}
 
@@ -399,7 +394,7 @@ async function finishCurrentPolygon(): Promise<boolean> {
 		);
 
 		if (!tempFill) {
-			eda.sys_Message.showFollowMouseTip('错误: 无法创建绘制区域', 3000);
+			eda.sys_Message.showToastMessage('错误: 无法创建绘制区域', 'error', 3);
 			return false;
 		}
 
@@ -413,14 +408,14 @@ async function finishCurrentPolygon(): Promise<boolean> {
 		await deleteTempFill();
 
 		if (!success) {
-			eda.sys_Message.showFollowMouseTip('创建失败，请重试', 3000);
+			eda.sys_Message.showToastMessage('创建失败，请重试', 'info', 3);
 		}
 		return success;
 	}
 	catch (e) {
 		console.error(TAG, 'Failed to finish polygon:', e);
 		await deleteTempFill();
-		eda.sys_Message.showFollowMouseTip(`错误: ${e instanceof Error ? e.message : String(e)}`, 3000);
+		eda.sys_Message.showToastMessage(`错误: ${e instanceof Error ? e.message : String(e)}`, 'info', 3);
 		return false;
 	}
 }
@@ -562,13 +557,13 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
  */
 async function processPolygonFill(userPoints: Point[], gap: number): Promise<boolean> {
 	if (userPoints.length < 3) {
-		eda.sys_Message.showFollowMouseTip('错误: 至少需要3个点', 3000);
+		eda.sys_Message.showToastMessage('错误: 至少需要3个点', 'error', 3);
 		return false;
 	}
 
 	try {
 		// 步骤 1-2：收集障碍物
-		eda.sys_Message.showFollowMouseTip('正在收集障碍物...');
+		eda.sys_Message.showToastMessage('正在收集障碍物...', 'info', 3);
 		const allObstacles = await collectAllObstacles(targetLayer, currentOptions, gap);
 
 		// 转换为 Point[] 用于后续处理，保留旋转角度用于外扩
@@ -597,32 +592,37 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			const outerSource = pointsToSourceArray(outerPoints);
 			const complex = eda.pcb_MathPolygon.createComplexPolygon([outerSource] as any);
 			if (!complex) {
-				eda.sys_Message.showFollowMouseTip('错误: 无法构建多边形', 3000);
+				eda.sys_Message.showToastMessage('错误: 无法构建多边形', 'error', 3);
 				return false;
 			}
 			const fill = await eda.pcb_PrimitiveFill.create(targetLayer as any, complex, '', undefined, 10, false);
 			if (!fill) {
-				eda.sys_Message.showFollowMouseTip('错误: 无法创建填充', 3000);
+				eda.sys_Message.showToastMessage('错误: 无法创建填充', 'error', 3);
 				return false;
 			}
 			fillCount++;
-			eda.sys_Message.removeFollowMouseTip();
 			sendStatus('done', { count: fillCount });
 			return true;
 		}
 
-		// 步骤 3-4：根据间隙外扩
-		console.warn(TAG, `Offset step: gap=${gap}, obstacleCount=${obstaclePoints.length}`);
-		const offsetPoints = offsetObstacles(obstaclePoints.map((pts, i) => ({
+		// 步骤 3：裁剪到用户多边形区域内（先裁剪再外扩，符合PRD流程）
+		const userRegionCW = ensureClockwise(userPoints);
+		const clippedObstacles = clipObstaclesToRegion(obstaclePoints, userRegionCW);
+		console.warn(TAG, `Clip to region: ${obstaclePoints.length} → ${clippedObstacles.length} obstacles`);
+
+		// 步骤 4：根据间隙外扩（裁剪后再外扩）
+		// clipObstaclesToRegion 返回的洞与原始障碍物一一对应（顺序保持）
+		console.warn(TAG, `Offset step: gap=${gap}, obstacleCount=${clippedObstacles.length}`);
+		const offsetPoints = offsetObstacles(clippedObstacles.map((pts, i) => ({
 			points: pts,
-			rotation: obstacleRotations[i],
-			negateBisector: obstacleNegateBisector[i],
-			extraGap: obstacleExtraGaps[i],
+			rotation: obstacleRotations[i] ?? 0,
+			negateBisector: obstacleNegateBisector[i] ?? false,
+			extraGap: obstacleExtraGaps[i] ?? gap,
 		})));
 
 		// 步骤 5：AABB 预过滤 — 只保留与用户多边形相交的洞
 		const regionBB = calculateBoundingBox(userPoints);
-		const maxExtraGap = Math.max(...obstacleExtraGaps, gap);
+		const maxExtraGap = Math.max(...clippedExtraGaps, gap);
 		const regionBBExpanded = {
 			minX: regionBB.minX - maxExtraGap,
 			minY: regionBB.minY - maxExtraGap,
@@ -632,31 +632,26 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 		const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
 		console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} holes`);
 
-		// 步骤 5b：裁剪到用户多边形区域内（精确裁剪，去除超出边界的部分）
-		const clippedHoles = clipObstaclesToRegion(aabbFiltered, userPoints);
-		console.warn(TAG, `Clip to region: ${aabbFiltered.length} → ${clippedHoles.length} holes`);
-
-		// 步骤 5c：合并重叠洞，减少布尔运算复杂度
-		const mergedHoles = mergeOverlappingObstacles(clippedHoles);
-		console.warn(TAG, `Merge: ${clippedHoles.length} → ${mergedHoles.length} holes`);
+		// 步骤 5b：合并重叠洞，减少布尔运算复杂度
+		const mergedHoles = mergeOverlappingObstacles(aabbFiltered);
+		console.warn(TAG, `Merge: ${aabbFiltered.length} → ${mergedHoles.length} holes`);
 
 		// 步骤 6：布尔差集
-		eda.sys_Message.showFollowMouseTip('正在构建多边形...');
-		const userRegion = ensureClockwise(userPoints);
+		eda.sys_Message.showToastMessage('正在构建多边形...', 'info', 3);
 		const results = await subtractHolesFromRegionIncremental(
-			userRegion, mergedHoles,
-			(done, total) => eda.sys_Message.showFollowMouseTip(`正在布尔运算... (${done}/${total})`),
+			userRegionCW, mergedHoles,
+			(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, 'info', 3),
 		);
 
 		if (results.length === 0) {
-			eda.sys_Message.showFollowMouseTip('挖洞后区域为空', 3000);
+			eda.sys_Message.showToastMessage('挖洞后区域为空', 'info', 3);
 			return false;
 		}
 
 		console.warn(TAG, `Difference result: ${results.length} polygon(s)`);
 
 		// 将每个结果多边形转为 complex polygon 格式并创建填充
-		eda.sys_Message.showFollowMouseTip('正在创建填充...');
+		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
 		let created = 0;
 
 		for (const result of results) {
@@ -677,18 +672,17 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 		}
 
 		if (created === 0) {
-			eda.sys_Message.showFollowMouseTip('错误: 无法创建填充', 3000);
+			eda.sys_Message.showToastMessage('错误: 无法创建填充', 'error', 3);
 			return false;
 		}
 
 		console.warn(TAG, `Created ${created} fill(s), total: ${fillCount}`);
-		eda.sys_Message.removeFollowMouseTip();
 		sendStatus('done', { count: fillCount });
 		return true;
 	}
 	catch (e) {
 		console.error(TAG, 'Failed to create fill:', e);
-		eda.sys_Message.showFollowMouseTip(`错误: ${e instanceof Error ? e.message : String(e)}`, 3000);
+		eda.sys_Message.showToastMessage(`错误: ${e instanceof Error ? e.message : String(e)}`, 'info', 3);
 		return false;
 	}
 }
@@ -764,7 +758,6 @@ export async function drawDynamicFill(): Promise<void> {
 						currentPoints = [];
 						deleteTempFill();
 						cleanupListeners();
-						eda.sys_Message.removeFollowMouseTip('请左键点击填充区域的轮廓点');
 					}
 				},
 				onBeforeCloseCallFn: () => {
@@ -772,7 +765,6 @@ export async function drawDynamicFill(): Promise<void> {
 					currentPoints = [];
 					deleteTempFill();
 					cleanupListeners();
-					eda.sys_Message.removeFollowMouseTip('点击画布拾取点 | Enter完成 | Esc取消');
 					return true;
 				},
 			},

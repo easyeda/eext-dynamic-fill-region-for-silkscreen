@@ -190,20 +190,12 @@ async function pollCommands(): Promise<void> {
  */
 async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<boolean> {
 	try {
-		// 步骤1: 获取选中的图元对象列表
+		// 步骤1: 获取选中的图元列表
 		let selectedPrimitives: any[] = [];
 		try {
 			const result = await eda.pcb_SelectControl.getAllSelectedPrimitives();
 			if (Array.isArray(result)) {
 				selectedPrimitives = result;
-			}
-			else if (result && typeof result === 'object') {
-				if (Symbol.iterator in result) {
-					selectedPrimitives = [...result];
-				}
-				else {
-					selectedPrimitives = [result];
-				}
 			}
 		}
 		catch (e) {
@@ -218,7 +210,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 			return false;
 		}
 
-		// 步骤2: 遍历选中图元，检测是否是填充
+		// 步骤2: 遍历选中图元，检测是否是填充区域
 		let selectedFill: any = null;
 		let fillLayer = 0;
 		let polygonSourceArray: (number | string)[] | null = null;
@@ -226,8 +218,10 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		for (const prim of selectedPrimitives) {
 			if (!prim) continue;
 
-			const layer = prim.getState_Layer?.();
-			console.warn(TAG, 'handleFillAvoid: checking primitive layer =', layer);
+			const primitiveType = prim.primitiveType;
+			const layer = prim.layer;
+			const regionName = prim.regionName;
+			console.warn(TAG, 'handleFillAvoid: type =', primitiveType, 'layer =', layer, 'regionName =', regionName);
 
 			// 步骤3: 检测是否是丝印层
 			if (layer !== LAYER_TOP_SILKSCREEN && layer !== LAYER_BOTTOM_SILKSCREEN) {
@@ -235,24 +229,19 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 				continue;
 			}
 
-			// 步骤2: 检测是否是填充 - 通过 PolygonSourceArray
-			let poly: (number | string)[] | null = null;
-			try {
-				poly = await prim.getState_PolygonSourceArray?.();
-			}
-			catch (e) {
-				console.warn(TAG, 'getState_PolygonSourceArray error:', e);
-			}
-
-			if (poly && poly.length > 0) {
-				selectedFill = prim;
-				fillLayer = layer;
-				polygonSourceArray = poly;
-				console.warn(TAG, 'handleFillAvoid: Found fill on layer', layer);
-				break;
-			}
-			else {
-				console.warn(TAG, 'Not a fill (no PolygonSourceArray or empty)');
+			// 步骤2: 检测是否是填充区域 - primitiveType=Region 且 regionName=Fill Region
+			if (primitiveType === 'Region' && regionName === 'Fill Region') {
+				const complexPolygon = prim.complexPolygon;
+				if (complexPolygon && complexPolygon.polygon) {
+					const poly = complexPolygon.polygon;
+					if (poly.length > 0) {
+						selectedFill = prim;
+						fillLayer = layer;
+						polygonSourceArray = poly;
+						console.warn(TAG, 'handleFillAvoid: Found fill region on layer', layer);
+						break;
+					}
+				}
 			}
 		}
 
@@ -330,7 +319,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		// 删除原填充
-		const fillId = selectedFill.getState_PrimitiveId?.();
+		const fillId = selectedFill.primitiveId;
 		if (fillId) {
 			await eda.pcb_PrimitiveFill.delete(fillId);
 			console.warn(TAG, 'handleFillAvoid: Deleted original fill:', fillId);

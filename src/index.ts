@@ -166,11 +166,7 @@ async function pollCommands(): Promise<void> {
 				}
 			}
 			else if (cmd.type === 'fillAvoid') {
-				eda.sys_Message.showToastMessage('正在处理填充避让...', 'info', 3);
-				const success = await handleFillAvoid(cmd.gap, cmd.options);
-				if (success) {
-					eda.sys_Message.showToastMessage('填充避让完成', 'info', 3);
-				}
+				await handleFillAvoid(cmd.gap, cmd.options);
 			}
 		}
 	}
@@ -203,7 +199,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 
 		// 步骤1: 没有选中任何图元
 		if (selectedPrimitives.length === 0) {
-			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'warning', 3);
+			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'info', 3);
 			return false;
 		}
 
@@ -244,7 +240,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 
 		// 步骤2: 没有找到填充
 		if (!selectedFill) {
-			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'warning', 3);
+			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'info', 3);
 			return false;
 		}
 
@@ -258,6 +254,9 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		console.warn(TAG, 'handleFillAvoid: Fill has', fillPoints.length, 'polygon points');
+
+		// 检测通过，开始处理
+		eda.sys_Message.showToastMessage('正在处理填充避让...', 'info', 3);
 
 		// 收集障碍物（使用选中填充的层）
 		const allObstacles = await collectAllObstacles(fillLayer, options, gap);

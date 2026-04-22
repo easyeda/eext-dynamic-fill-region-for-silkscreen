@@ -8,7 +8,7 @@
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
 import { getAllComponents, getComponentObstacles, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
-import { mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
+import { clipObstaclesToRegion, mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
 import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';
 import { aabbIntersects, calculateBoundingBox, ensureClockwise, ensureCounterClockwise, pointsToSourceArray, sourceArrayToPoints } from './utils/polygonUtils';
@@ -309,12 +309,16 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 				maxX: fillBB.maxX + maxExtraGap,
 				maxY: fillBB.maxY + maxExtraGap,
 			};
-			const holes = allHoles.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
-			console.warn(TAG, 'handleFillAvoid: AABB filter', allHoles.length, '→', holes.length, 'holes');
+			const aabbFiltered = allHoles.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
+			console.warn(TAG, 'handleFillAvoid: AABB filter', allHoles.length, '→', aabbFiltered.length, 'holes');
+
+			// 裁剪到填充区域内（精确裁剪）
+			const clippedHoles = clipObstaclesToRegion(aabbFiltered, fillPoints);
+			console.warn(TAG, 'handleFillAvoid: Clip to region', aabbFiltered.length, '→', clippedHoles.length, 'holes');
 
 			// 合并重叠洞
-			const mergedHoles = mergeOverlappingObstacles(holes);
-			console.warn(TAG, 'handleFillAvoid: Merge', holes.length, '→', mergedHoles.length, 'holes');
+			const mergedHoles = mergeOverlappingObstacles(clippedHoles);
+			console.warn(TAG, 'handleFillAvoid: Merge', clippedHoles.length, '→', mergedHoles.length, 'holes');
 
 			// 执行布尔差运算
 			const regionOuter = ensureClockwise(fillPoints);
@@ -625,12 +629,16 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			maxX: regionBB.maxX + maxExtraGap,
 			maxY: regionBB.maxY + maxExtraGap,
 		};
-		const filteredOffsetPoints = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
-		console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${filteredOffsetPoints.length} holes (region expanded by ${gap})`);
+		const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
+		console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} holes`);
 
-		// 步骤 5b：合并重叠洞，减少布尔运算复杂度
-		const mergedHoles = mergeOverlappingObstacles(filteredOffsetPoints);
-		console.warn(TAG, `Merge: ${filteredOffsetPoints.length} → ${mergedHoles.length} holes`);
+		// 步骤 5b：裁剪到用户多边形区域内（精确裁剪，去除超出边界的部分）
+		const clippedHoles = clipObstaclesToRegion(aabbFiltered, userPoints);
+		console.warn(TAG, `Clip to region: ${aabbFiltered.length} → ${clippedHoles.length} holes`);
+
+		// 步骤 5c：合并重叠洞，减少布尔运算复杂度
+		const mergedHoles = mergeOverlappingObstacles(clippedHoles);
+		console.warn(TAG, `Merge: ${clippedHoles.length} → ${mergedHoles.length} holes`);
 
 		// 步骤 6：布尔差集
 		eda.sys_Message.showFollowMouseTip('正在构建多边形...');

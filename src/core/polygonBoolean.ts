@@ -268,7 +268,7 @@ export async function subtractHolesFromRegionIncremental(
 		return [{ outer: region, holes: [] }];
 
 	const regionRing = pointsToRing(region);
-	let resultGeom: Geom = [[regionRing]];
+	let resultGeom: Geom = [regionRing];
 
 	for (let i = 0; i < holes.length; i += batchSize) {
 		const batch = holes.slice(i, i + batchSize);

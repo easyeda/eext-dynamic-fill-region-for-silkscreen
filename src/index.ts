@@ -111,8 +111,8 @@ async function pollCommands(): Promise<void> {
 			delete _g.__df_cmd;
 
 			if (cmd.type === 'start') {
-				eda.sys_Message.showFollowMouseTip('请左键点击3个及以上轮廓点', 60000);
-				eda.sys_Message.showToastMessage('请左键点击3个及以上轮廓点', 'info', 3000);
+				eda.sys_Message.showFollowMouseTip('请左键点击3个及以上轮廓点', 3000);
+				eda.sys_Message.showToastMessage('请左键点击3个及以上轮廓点', 'info', 3);
 				console.warn(TAG, `Start command received, gap=${cmd.gap}`);
 
 				currentGap = cmd.gap || 0;

@@ -88,6 +88,16 @@ export function calculateBoundingBox(points: Point[]): { minX: number; minY: num
 }
 
 /**
+ * Test if two AABBs intersect
+ */
+export function aabbIntersects(
+	a: { minX: number; minY: number; maxX: number; maxY: number },
+	b: { minX: number; minY: number; maxX: number; maxY: number },
+): boolean {
+	return a.maxX >= b.minX && b.maxX >= a.minX && a.maxY >= b.minY && b.maxY >= a.minY;
+}
+
+/**
  * Calculate area of bounding box of a set of points
  */
 export function calculateBoundingBoxArea(points: Point[]): number {

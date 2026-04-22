@@ -6,7 +6,7 @@
 import type { Geom } from 'polyclip-ts';
 import type { Point } from '../utils/polygonUtils';
 import { difference, intersection, union } from 'polyclip-ts';
-import { calculateBoundingBox } from '../utils/polygonUtils';
+import { aabbIntersects, calculateBoundingBox } from '../utils/polygonUtils';
 
 const TAG = '[DynamicFill:PolygonBoolean]';
 
@@ -77,27 +77,11 @@ export function mergeOverlappingObstacles(
 			parent[ra] = rb;
 	}
 
-	// Pairwise intersection detection
+	// Pairwise intersection detection — pure AABB check (fast, no polyclip call)
 	for (let i = 0; i < n; i++) {
 		for (let j = i + 1; j < n; j++) {
-			// AABB quick reject
-			if (bboxes[i].maxX < bboxes[j].minX || bboxes[j].maxX < bboxes[i].minX)
-				continue;
-			if (bboxes[i].maxY < bboxes[j].minY || bboxes[j].maxY < bboxes[i].minY)
-				continue;
-
-			// AABB overlaps — test with polyclip union
-			try {
-				const ringA: Geom = [pointsToRing(obstacles[i])];
-				const ringB: Geom = [pointsToRing(obstacles[j])];
-				const result = union(ringA, ringB);
-				// If union produces fewer polygons than 2, they merged (overlap)
-				if (result.length < 2) {
-					unite(i, j);
-				}
-			}
-			catch (e) {
-				// Union failed — keep separate
+			if (aabbIntersects(bboxes[i], bboxes[j])) {
+				unite(i, j);
 			}
 		}
 	}
@@ -267,5 +251,57 @@ export function subtractHolesFromRegion(
 		results.push({ outer, holes: innerHoles });
 	}
 
+	return results;
+}
+
+/**
+ * Async incremental boolean difference — processes holes in batches to avoid blocking the main thread.
+ * Yields to the event loop between batches via setTimeout(0).
+ */
+export async function subtractHolesFromRegionIncremental(
+	region: Point[],
+	holes: Point[][],
+	onProgress?: (done: number, total: number) => void,
+	batchSize: number = 20,
+): Promise<{ outer: Point[]; holes: Point[][] }[]> {
+	if (holes.length === 0)
+		return [{ outer: region, holes: [] }];
+
+	const regionRing = pointsToRing(region);
+	let resultGeom: Geom = [[regionRing]];
+
+	for (let i = 0; i < holes.length; i += batchSize) {
+		const batch = holes.slice(i, i + batchSize);
+		const holePolys: Geom[] = batch.map(hole => [pointsToRing(hole)]);
+		try {
+			resultGeom = difference(resultGeom, ...holePolys);
+		}
+		catch (e) {
+			for (const holePoly of holePolys) {
+				try { resultGeom = difference(resultGeom, holePoly); }
+				catch (_) {}
+			}
+		}
+		onProgress?.(Math.min(i + batchSize, holes.length), holes.length);
+		await new Promise<void>(r => setTimeout(r, 0));
+	}
+
+	console.warn(TAG, `Incremental difference returned ${resultGeom.length} polygon(s)`);
+
+	const results: { outer: Point[]; holes: Point[][] }[] = [];
+	for (const poly of resultGeom) {
+		if (poly.length === 0)
+			continue;
+		const outerRing = poly[0];
+		if (outerRing.length < 4)
+			continue;
+		const outer = ringToPoints(outerRing);
+		const innerHoles: Point[][] = [];
+		for (let i = 1; i < poly.length; i++) {
+			if (poly[i].length >= 4)
+				innerHoles.push(ringToPoints(poly[i]));
+		}
+		results.push({ outer, holes: innerHoles });
+	}
 	return results;
 }

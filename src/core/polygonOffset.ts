@@ -4,7 +4,7 @@
  */
 
 import type { Point } from '../utils/polygonUtils';
-import { pointsToSourceArray, sourceArrayToPoints } from '../utils/polygonUtils';
+import { ensureCounterClockwise, pointsToSourceArray, sourceArrayToPoints } from '../utils/polygonUtils';
 
 const TAG = '[DynamicFill:PolygonOffset]';
 
@@ -220,4 +220,19 @@ export function offsetPolygon(sourceArray: (number | string)[], offset: number, 
  */
 export function offsetPolygons(sourceArrays: (number | string)[][], offset: number, negateBisector: boolean = false): (number | string)[][] {
 	return sourceArrays.map(arr => offsetPolygon(arr, offset, negateBisector));
+}
+
+export interface ObstacleForOffset {
+	points: Point[];
+	rotation: number;
+	negateBisector: boolean;
+	extraGap: number;
+}
+
+export function offsetObstacles(obstacles: ObstacleForOffset[]): Point[][] {
+	return obstacles.map((obs) => {
+		const ccwPts = ensureCounterClockwise(obs.points);
+		const rotation = Math.abs(obs.rotation) > 0.01 ? obs.rotation : 0;
+		return offsetPolygonPoints(ccwPts, obs.extraGap, rotation, obs.negateBisector);
+	});
 }

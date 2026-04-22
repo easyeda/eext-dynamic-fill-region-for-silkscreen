@@ -8,10 +8,10 @@
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
 import { getAllComponents, getComponentObstacles, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxes, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
-import { mergeOverlappingObstacles, subtractHolesFromRegion } from './core/polygonBoolean';
-import { offsetPolygonPoints } from './core/polygonOffset';
+import { mergeOverlappingObstacles, subtractHolesFromRegion, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
+import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';
-import { ensureClockwise, ensureCounterClockwise, pointsToSourceArray, sourceArrayToPoints } from './utils/polygonUtils';
+import { aabbIntersects, calculateBoundingBox, ensureClockwise, ensureCounterClockwise, pointsToSourceArray, sourceArrayToPoints } from './utils/polygonUtils';
 
 const TAG = '[DynamicFill]';
 
@@ -290,31 +290,37 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 		else {
 			// 对障碍物进行外扩
-			const offsetPoints: Point[][] = [];
-			for (let i = 0; i < obstaclePoints.length; i++) {
-				const pts = obstaclePoints[i];
-				const rotation = obstacleRotations[i];
-				const negateBisector = obstacleNegateBisector[i];
-				const extraGap = obstacleExtraGaps[i];
-				const ccwPts = ensureCounterClockwise(pts);
-
-				let offset: Point[];
-				if (extraGap > 0 && Math.abs(rotation) > 0.01) {
-					offset = offsetPolygonPoints(ccwPts, extraGap, rotation, negateBisector);
-				}
-				else {
-					offset = offsetPolygonPoints(ccwPts, extraGap, 0, negateBisector);
-				}
-				offsetPoints.push(offset);
-			}
+			const offsetPoints = offsetObstacles(obstaclePoints.map((pts, i) => ({
+				points: pts,
+				rotation: obstacleRotations[i],
+				negateBisector: obstacleNegateBisector[i],
+				extraGap: obstacleExtraGaps[i],
+			})));
 
 			// 收集所有外扩后的洞
-			const holes = offsetPoints.filter(p => p.length >= 3);
-			console.warn(TAG, 'handleFillAvoid: Using', holes.length, 'holes for boolean operation');
+			const allHoles = offsetPoints.filter(p => p.length >= 3);
+
+			// AABB 预过滤 — 只保留与填充区域相交的洞
+			const fillBB = calculateBoundingBox(fillPoints);
+			const fillBBExpanded = {
+				minX: fillBB.minX - gap,
+				minY: fillBB.minY - gap,
+				maxX: fillBB.maxX + gap,
+				maxY: fillBB.maxY + gap,
+			};
+			const holes = allHoles.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
+			console.warn(TAG, 'handleFillAvoid: AABB filter', allHoles.length, '→', holes.length, 'holes');
+
+			// 合并重叠洞
+			const mergedHoles = mergeOverlappingObstacles(holes);
+			console.warn(TAG, 'handleFillAvoid: Merge', holes.length, '→', mergedHoles.length, 'holes');
 
 			// 执行布尔差运算
 			const regionOuter = ensureClockwise(fillPoints);
-			results = subtractHolesFromRegion(regionOuter, holes);
+			results = await subtractHolesFromRegionIncremental(
+				regionOuter, mergedHoles,
+				(done, total) => eda.sys_Message.showFollowMouseTip(`正在布尔运算... (${done}/${total})`),
+			);
 			console.warn(TAG, 'handleFillAvoid: Boolean result:', results.length, 'polygon(s)');
 		}
 
@@ -429,9 +435,35 @@ interface ObstacleWithRotation {
  */
 async function collectAllObstacles(layer: number, options: ObstacleOptions, gap: number): Promise<ObstacleWithRotation[]> {
 	const allObstacles: ObstacleWithRotation[] = [];
-	let compDesignator = 0; let compBBox = 0;
+	const copperLayer = layer === LAYER_BOTTOM_SILKSCREEN ? LAYER_BOTTOM_COPPER : LAYER_TOP_COPPER;
 
-	const components = await getAllComponents();
+	// 并行获取所有障碍物数据
+	const [
+		components,
+		standalonePads,
+		vias,
+		copperTexts,
+		silkTexts,
+		cutouts,
+		silkLines,
+		copperLines,
+		copperTracks,
+		regions,
+	] = await Promise.all([
+		getAllComponents().catch((e) => { console.warn(TAG, 'getAllComponents failed:', e); return []; }),
+		options.pads ? getStandalonePadPolygons(layer).catch((e) => { console.warn(TAG, 'getStandalonePadPolygons failed:', e); return []; }) : Promise.resolve([]),
+		options.vias ? getViaPolygons().catch((e) => { console.warn(TAG, 'getViaPolygons failed:', e); return []; }) : Promise.resolve([]),
+		options.textCopper ? getSilkscreenTextBoxesWithRotation(copperLayer, gap).catch((e) => { console.warn(TAG, 'getCopperTexts failed:', e); return []; }) : Promise.resolve([]),
+		options.textSilk ? getSilkscreenTextBoxesWithRotation(layer, gap).catch((e) => { console.warn(TAG, 'getSilkTexts failed:', e); return []; }) : Promise.resolve([]),
+		options.cutouts ? getCutoutRegionPolygons().catch((e) => { console.warn(TAG, 'getCutouts failed:', e); return []; }) : Promise.resolve([]),
+		options.linesSilk ? getLinePolygons(layer).catch((e) => { console.warn(TAG, 'getSilkLines failed:', e); return []; }) : Promise.resolve([]),
+		options.linesCopper ? getLinePolygons(copperLayer).catch((e) => { console.warn(TAG, 'getCopperLines failed:', e); return []; }) : Promise.resolve([]),
+		options.tracksCopper ? getTrackPolygons(copperLayer).catch((e) => { console.warn(TAG, 'getCopperTracks failed:', e); return []; }) : Promise.resolve([]),
+		getRegionPolygons().catch((e) => { console.warn(TAG, 'getRegions failed:', e); return []; }),
+	]);
+
+	// 处理组件（含位号）— 每个组件仍需串行调用 getComponentObstacles
+	let compDesignator = 0; let compBBox = 0;
 	for (const comp of components) {
 		try {
 			const obstacles = await getComponentObstacles(comp, layer);
@@ -451,148 +483,48 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 	}
 	console.warn(TAG, `Components: ${components.length} comps, ${compDesignator} designators, ${compBBox} bboxes`);
 
-	let standalonePadCount = 0;
-	if (options.pads) {
-		try {
-			const standalonePads = await getStandalonePadPolygons(layer);
-			standalonePadCount = standalonePads.length;
-			for (const pad of standalonePads) {
-				allObstacles.push({ polygon: pad.polygon, rotation: 0, negateBisector: false });
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get standalone pads:', e);
-		}
+	for (const pad of standalonePads) {
+		allObstacles.push({ polygon: pad.polygon, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Standalone pads: ${standalonePadCount}`);
+	console.warn(TAG, `Standalone pads: ${standalonePads.length}`);
 
-	// 过孔
-	let viaCount = 0;
-	if (options.vias) {
-		try {
-			const vias = await getViaPolygons();
-			viaCount = vias.length;
-			for (const via of vias) {
-				allObstacles.push({ polygon: via, rotation: 0, negateBisector: false });
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get via polygons:', e);
-		}
+	for (const via of vias) {
+		allObstacles.push({ polygon: via, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Vias: ${viaCount}`);
+	console.warn(TAG, `Vias: ${vias.length}`);
 
-	let textCount = 0;
-	// 铜层文本
-	if (options.textCopper) {
-		try {
-			const copperLayer = layer === LAYER_BOTTOM_SILKSCREEN ? LAYER_BOTTOM_COPPER : LAYER_TOP_COPPER;
-			const textData = await getSilkscreenTextBoxesWithRotation(copperLayer, gap);
-			for (const t of textData) {
-				allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: false, extraGap: 0 });
-				textCount++;
-				console.warn(TAG, `  Copper text: rot=${t.rotation}, pts=${t.polygon.length}`);
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get copper text boxes:', e);
-		}
+	for (const t of copperTexts) {
+		allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: false, extraGap: 0 });
 	}
-	// 丝印层文本
-	if (options.textSilk) {
-		try {
-			const textData = await getSilkscreenTextBoxesWithRotation(layer, gap);
-			for (const t of textData) {
-				allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: true, extraGap: 0 });
-				textCount++;
-				console.warn(TAG, `  Silk text: rot=${t.rotation}, pts=${t.polygon.length}`);
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get silkscreen text boxes:', e);
-		}
+	for (const t of silkTexts) {
+		allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: true, extraGap: 0 });
 	}
-	console.warn(TAG, `Text boxes: ${textCount}`);
+	console.warn(TAG, `Text boxes: ${copperTexts.length} copper + ${silkTexts.length} silk`);
 
-	// 挖槽区域（Fill on MULTI layer）
-	let cutoutCount = 0;
-	if (options.cutouts) {
-		try {
-			const cutouts = await getCutoutRegionPolygons();
-			cutoutCount = cutouts.length;
-			for (const cutout of cutouts) {
-				allObstacles.push({ polygon: cutout, rotation: 0, negateBisector: false });
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get cutout regions:', e);
-		}
+	for (const cutout of cutouts) {
+		allObstacles.push({ polygon: cutout, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Cutout regions: ${cutoutCount}`);
+	console.warn(TAG, `Cutout regions: ${cutouts.length}`);
 
-	// 丝印层线条
-	let silkLineCount = 0;
-	if (options.linesSilk) {
-		try {
-			const silkLines = await getLinePolygons(layer);
-			silkLineCount = silkLines.length;
-			for (const line of silkLines) {
-				allObstacles.push({ polygon: line, rotation: 0, negateBisector: false });
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get silkscreen lines:', e);
-		}
+	for (const line of silkLines) {
+		allObstacles.push({ polygon: line, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Silkscreen lines: ${silkLineCount}`);
+	console.warn(TAG, `Silkscreen lines: ${silkLines.length}`);
 
-	// 铜层线条（Polyline on copper layer）
-	let copperLineCount = 0;
-	if (options.linesCopper) {
-		try {
-			const copperLayer = layer === LAYER_BOTTOM_SILKSCREEN ? LAYER_BOTTOM_COPPER : LAYER_TOP_COPPER;
-			const copperLines = await getLinePolygons(copperLayer);
-			copperLineCount = copperLines.length;
-			for (const line of copperLines) {
-				allObstacles.push({ polygon: line, rotation: 0, negateBisector: false });
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get copper lines:', e);
-		}
+	for (const line of copperLines) {
+		allObstacles.push({ polygon: line, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Copper lines: ${copperLineCount}`);
+	console.warn(TAG, `Copper lines: ${copperLines.length}`);
 
-	// 铜层导线
-	let copperTrackCount = 0;
-	if (options.tracksCopper) {
-		try {
-			const copperLayer = layer === LAYER_BOTTOM_SILKSCREEN ? LAYER_BOTTOM_COPPER : LAYER_TOP_COPPER;
-			const copperTracks = await getTrackPolygons(copperLayer);
-			copperTrackCount = copperTracks.length;
-			for (const track of copperTracks) {
-				allObstacles.push({ polygon: track, rotation: 0, negateBisector: false });
-			}
-		}
-		catch (e) {
-			console.warn(TAG, 'Failed to get copper tracks:', e);
-		}
+	for (const track of copperTracks) {
+		allObstacles.push({ polygon: track, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Copper tracks: ${copperTrackCount}`);
+	console.warn(TAG, `Copper tracks: ${copperTracks.length}`);
 
-	// 禁止区域/约束区域（Region primitives）
-	let regionCount = 0;
-	try {
-		const regions = await getRegionPolygons();
-		regionCount = regions.length;
-		for (const region of regions) {
-			allObstacles.push({ polygon: region, rotation: 0, negateBisector: false });
-		}
+	for (const region of regions) {
+		allObstacles.push({ polygon: region, rotation: 0, negateBisector: false });
 	}
-	catch (e) {
-		console.warn(TAG, 'Failed to get region polygons:', e);
-	}
-	console.warn(TAG, `Region primitives: ${regionCount}`);
+	console.warn(TAG, `Region primitives: ${regions.length}`);
 
 	// 去重：designator 和 text 可能指向同一个 primitive，导致同一障碍物被添加两次
 	const seen = new Set<string>();
@@ -671,55 +603,37 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			return true;
 		}
 
-		// 步骤 3-4：根据间隙外扩（确保逆时针方向，外扩算法法向量朝外）
-		// 对于旋转的障碍物（文本、封装），使用 rotate-offset-rotate-back 方法
+		// 步骤 3-4：根据间隙外扩
 		console.warn(TAG, `Offset step: gap=${gap}, obstacleCount=${obstaclePoints.length}`);
-		const offsetPoints: Point[][] = [];
-		for (let i = 0; i < obstaclePoints.length; i++) {
-			const pts = obstaclePoints[i];
-			const rotation = obstacleRotations[i];
-			const negateBisector = obstacleNegateBisector[i];
-			const extraGap = obstacleExtraGaps[i];
-			const ccwPts = ensureCounterClockwise(pts);
-			if (extraGap > 0 && Math.abs(rotation) > 0.01) {
-				// Rotated obstacle: use rotate-offset-rotate-back
-				const offset = offsetPolygonPoints(ccwPts, extraGap, rotation, negateBisector);
-				offsetPoints.push(offset);
-				if (i < 3) console.warn(TAG, `  Obstacle #${i}: rotated=${rotation.toFixed(1)}, negate=${negateBisector}, extraGap=${extraGap}, offset applied`);
-			}
-			else {
-				// Non-rotated, no gap, or extraGap=0: direct offset (or no-op if extraGap=0)
-				const offset = offsetPolygonPoints(ccwPts, extraGap, 0, negateBisector);
-				offsetPoints.push(offset);
-				if (i < 3) {
-					const origY = pts[0]?.y ?? 0;
-					const offY = offset[0]?.y ?? 0;
-					const dy = offY - origY;
-					console.warn(TAG, `  Obstacle #${i}: extraGap=${extraGap}, rotation=${rotation}, negate=${negateBisector}, origY=${origY.toFixed(2)}, offsetY=${offY.toFixed(2)}, deltaY=${dy.toFixed(2)}`);
-				}
-			}
-		}
+		const offsetPoints = offsetObstacles(obstaclePoints.map((pts, i) => ({
+			points: pts,
+			rotation: obstacleRotations[i],
+			negateBisector: obstacleNegateBisector[i],
+			extraGap: obstacleExtraGaps[i],
+		})));
 
-		// 步骤 5：跳过合并，直接进行布尔差运算（polyclip-ts 可以一次处理多个洞）
-		console.warn(TAG, `Skipping merge, using ${offsetPoints.length} holes directly`);
-		for (let i = 0; i < offsetPoints.length; i++) {
-			const pts = offsetPoints[i];
-			const xs = pts.map(p => p.x);
-			const ys = pts.map(p => p.y);
-			const w = Math.max(...xs) - Math.min(...xs);
-			const h = Math.max(...ys) - Math.min(...ys);
-			const orig = obstaclePoints[i];
-			const oxs = orig.map(p => p.x);
-			const oys = orig.map(p => p.y);
-			const ow = Math.max(...oxs) - Math.min(...oxs);
-			const oh = Math.max(...oys) - Math.min(...oys);
-			if (i < 10) console.warn(TAG, `  Hole #${i}: origAABB=${ow.toFixed(0)}x${oh.toFixed(0)} offsetAABB=${w.toFixed(0)}x${h.toFixed(0)}`);
-		}
+		// 步骤 5：AABB 预过滤 — 只保留与用户多边形相交的洞
+		const regionBB = calculateBoundingBox(userPoints);
+		const regionBBExpanded = {
+			minX: regionBB.minX - gap,
+			minY: regionBB.minY - gap,
+			maxX: regionBB.maxX + gap,
+			maxY: regionBB.maxY + gap,
+		};
+		const filteredOffsetPoints = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
+		console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${filteredOffsetPoints.length} holes (region expanded by ${gap})`);
+
+		// 步骤 5b：合并重叠洞，减少布尔运算复杂度
+		const mergedHoles = mergeOverlappingObstacles(filteredOffsetPoints);
+		console.warn(TAG, `Merge: ${filteredOffsetPoints.length} → ${mergedHoles.length} holes`);
 
 		// 步骤 6：布尔差集
 		eda.sys_Message.showFollowMouseTip('正在构建多边形...');
 		const userRegion = ensureClockwise(userPoints);
-		const results = subtractHolesFromRegion(userRegion, offsetPoints);
+		const results = await subtractHolesFromRegionIncremental(
+			userRegion, mergedHoles,
+			(done, total) => eda.sys_Message.showFollowMouseTip(`正在布尔运算... (${done}/${total})`),
+		);
 
 		if (results.length === 0) {
 			eda.sys_Message.showFollowMouseTip('挖洞后区域为空', 3000);

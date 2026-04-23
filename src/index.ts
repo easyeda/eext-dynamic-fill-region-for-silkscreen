@@ -7,7 +7,7 @@
 
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
-import { getAllComponents, getComponentObstacles, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
+import { getAllComponents, getComponentObstacles, getComponentPadPolygons, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
 import { clipObstaclesToRegionWithMeta, mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
 import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';
@@ -19,6 +19,7 @@ let currentState: 'IDLE' | 'DRAWING' = 'IDLE';
 
 let currentGap: number = 10;
 interface ObstacleOptions {
+	componentBBox: boolean;
 	vias: boolean;
 	pads: boolean;
 	cutouts: boolean;
@@ -29,7 +30,7 @@ interface ObstacleOptions {
 	tracksCopper: boolean;
 }
 
-let currentOptions: ObstacleOptions = { vias: true, pads: true, cutouts: true, textCopper: true, textSilk: true, linesSilk: true, linesCopper: true, tracksCopper: true };
+let currentOptions: ObstacleOptions = { componentBBox: true, vias: true, pads: true, cutouts: true, textCopper: true, textSilk: true, linesSilk: true, linesCopper: true, tracksCopper: true };
 let currentPoints: Point[] = [];
 let targetLayer: number = LAYER_TOP_SILKSCREEN;
 let fillCount: number = 0;
@@ -407,6 +408,7 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 	const [
 		components,
 		standalonePads,
+		componentPads,
 		vias,
 		copperTexts,
 		silkTexts,
@@ -418,6 +420,7 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 	] = await Promise.all([
 		getAllComponents().catch((e) => { console.warn(TAG, 'getAllComponents failed:', e); return []; }),
 		options.pads ? getStandalonePadPolygons(layer).catch((e) => { console.warn(TAG, 'getStandalonePadPolygons failed:', e); return []; }) : Promise.resolve([]),
+		!options.componentBBox ? getComponentPadPolygons(layer).catch((e) => { console.warn(TAG, 'getComponentPadPolygons failed:', e); return []; }) : Promise.resolve([]),
 		options.vias ? getViaPolygons().catch((e) => { console.warn(TAG, 'getViaPolygons failed:', e); return []; }) : Promise.resolve([]),
 		options.textCopper ? getSilkscreenTextBoxesWithRotation(copperLayer, gap).catch((e) => { console.warn(TAG, 'getCopperTexts failed:', e); return []; }) : Promise.resolve([]),
 		options.textSilk ? getSilkscreenTextBoxesWithRotation(layer, gap).catch((e) => { console.warn(TAG, 'getSilkTexts failed:', e); return []; }) : Promise.resolve([]),
@@ -444,12 +447,20 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 			allObstacles.push({ polygon: obstacles.designatorBox, rotation: 0, negateBisector: true });
 			compDesignator++;
 		}
-		if (obstacles.componentBBox) {
+		if (options.componentBBox && obstacles.componentBBox) {
 			allObstacles.push({ polygon: obstacles.componentBBox, rotation: 0, negateBisector: false });
 			compBBox++;
 		}
 	}
 	console.warn(TAG, `Components: ${components.length} comps, ${compDesignator} designators, ${compBBox} bboxes`);
+
+	// 封装内焊盘（仅当不使用封装BBox时）
+	if (!options.componentBBox) {
+		for (const pad of componentPads) {
+			allObstacles.push({ polygon: pad.polygon, rotation: 0, negateBisector: pad.negateBisector });
+		}
+		console.warn(TAG, `Component pads (instead of bbox): ${componentPads.length}`);
+	}
 
 	for (const pad of standalonePads) {
 		allObstacles.push({ polygon: pad.polygon, rotation: 0, negateBisector: false });
@@ -475,12 +486,12 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 	console.warn(TAG, `Cutout regions: ${cutouts.length}`);
 
 	for (const line of silkLines) {
-		allObstacles.push({ polygon: line, rotation: 0, negateBisector: false });
+		allObstacles.push({ polygon: line.polygon, rotation: 0, negateBisector: line.negateBisector });
 	}
 	console.warn(TAG, `Silkscreen lines: ${silkLines.length}`);
 
 	for (const line of copperLines) {
-		allObstacles.push({ polygon: line, rotation: 0, negateBisector: false });
+		allObstacles.push({ polygon: line.polygon, rotation: 0, negateBisector: line.negateBisector });
 	}
 	console.warn(TAG, `Copper lines: ${copperLines.length}`);
 

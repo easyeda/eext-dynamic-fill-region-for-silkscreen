@@ -5,8 +5,112 @@
 import type { Point } from '../utils/polygonUtils';
 import { createCirclePolygon, createPadPolygon, createRectanglePolygon, pointsToSourceArray, sourceArrayToPoints } from '../utils/polygonUtils';
 import { getDesignatorBoundingBox } from './designatorExtractor';
+import { offsetPolygonPoints } from './polygonOffset';
 
 const TAG = '[DynamicFill:ComponentData]';
+
+const CAP_SEGMENTS = 8;
+
+function createLineCapsule(x1: number, y1: number, x2: number, y2: number, lineWidth: number): Point[] | null {
+	const r = lineWidth / 2;
+	if (r < 1) return null;
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	const len = Math.sqrt(dx * dx + dy * dy);
+	if (len < 1) return null;
+	const ux = dx / len;
+	const uy = dy / len;
+	const nx = -uy;
+	const ny = ux;
+	const pts: Point[] = [];
+	for (let j = 0; j <= CAP_SEGMENTS; j++) {
+		const angle = Math.PI / 2 + (j / CAP_SEGMENTS) * Math.PI;
+		pts.push({
+			x: x1 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
+			y: y1 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
+		});
+	}
+	for (let j = 0; j <= CAP_SEGMENTS; j++) {
+		const angle = -Math.PI / 2 + (j / CAP_SEGMENTS) * Math.PI;
+		pts.push({
+			x: x2 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
+			y: y2 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
+		});
+	}
+	return pts.length >= 3 ? pts : null;
+}
+
+function createArcCapsule(x1: number, y1: number, x2: number, y2: number, arcAngleDeg: number, lineWidth: number): Point[] | null {
+	const r = lineWidth / 2;
+	if (r < 1 || Math.abs(arcAngleDeg) < 0.01) return null;
+
+	const arcAngle = arcAngleDeg * Math.PI / 180;
+	const mx = (x1 + x2) / 2;
+	const my = (y1 + y2) / 2;
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	const chordLen = Math.sqrt(dx * dx + dy * dy);
+	if (chordLen < 1) return null;
+
+	const halfAngle = arcAngle / 2;
+	const sinHalf = Math.sin(halfAngle);
+	if (Math.abs(sinHalf) < 1e-6) return createLineCapsule(x1, y1, x2, y2, lineWidth);
+
+	const radius = chordLen / (2 * Math.abs(sinHalf));
+	const d = radius * Math.cos(halfAngle);
+
+	const px = -dy / chordLen;
+	const py = dx / chordLen;
+	const sign = arcAngleDeg > 0 ? 1 : -1;
+	const cx = mx + px * d * sign;
+	const cy = my + py * d * sign;
+
+	const startAngle = Math.atan2(y1 - cy, x1 - cx);
+	const endAngle = Math.atan2(y2 - cy, x2 - cx);
+
+	let sweep = endAngle - startAngle;
+	if (arcAngleDeg > 0) {
+		while (sweep < 0) sweep += 2 * Math.PI;
+	}
+	else {
+		while (sweep > 0) sweep -= 2 * Math.PI;
+	}
+
+	const arcSegs = Math.max(16, Math.ceil(Math.abs(arcAngleDeg) / 5));
+	const capSegs = 12;
+	const outerPts: Point[] = [];
+	const innerPts: Point[] = [];
+	for (let i = 0; i <= arcSegs; i++) {
+		const t = i / arcSegs;
+		const a = startAngle + t * sweep;
+		const cos = Math.cos(a);
+		const sin = Math.sin(a);
+		outerPts.push({ x: cx + (radius + r) * cos, y: cy + (radius + r) * sin });
+		innerPts.push({ x: cx + (radius - r) * cos, y: cy + (radius - r) * sin });
+	}
+
+	// Build: outer → end cap → inner reversed → start cap
+	const pts: Point[] = [...outerPts];
+
+	// End cap: semicircle at arc endpoint (x2, y2)
+	const endRadial = startAngle + sweep;
+	for (let j = 1; j < capSegs; j++) {
+		const t = j / capSegs;
+		const a = endRadial + t * Math.PI * sign;
+		pts.push({ x: x2 + r * Math.cos(a), y: y2 + r * Math.sin(a) });
+	}
+
+	for (let i = innerPts.length - 1; i >= 0; i--) pts.push(innerPts[i]);
+
+	// Start cap: semicircle at arc start point (x1, y1)
+	for (let j = 1; j < capSegs; j++) {
+		const t = j / capSegs;
+		const a = startAngle + Math.PI + t * Math.PI * sign;
+		pts.push({ x: x1 + r * Math.cos(a), y: y1 + r * Math.sin(a) });
+	}
+
+	return pts.length >= 3 ? pts : null;
+}
 
 export interface ComponentObstacles {
 	silkscreenShapes: (number | string)[][];
@@ -208,6 +312,70 @@ export async function getStandalonePadPolygons(targetLayer: number): Promise<{ p
 	}
 	catch (e) {
 		console.error(TAG, 'Failed to get standalone pads:', e);
+	}
+	return result;
+}
+
+/**
+ * Get component pad polygons (pads belonging to components, not standalone)
+ * Used when componentBBox is unchecked — avoids by individual pads instead of whole bbox
+ */
+export async function getComponentPadPolygons(targetLayer: number): Promise<{ polygon: (number | string)[]; negateBisector: boolean }[]> {
+	const result: { polygon: (number | string)[]; negateBisector: boolean }[] = [];
+	try {
+		const allPads = await eda.pcb_PrimitivePad.getAll();
+		if (!allPads || allPads.length === 0)
+			return result;
+
+		const pads = allPads.filter((pad) => {
+			const pt = pad.getState_PrimitiveType?.();
+			return pt === 'ComponentPad';
+		});
+
+		const isTopSide = targetLayer === 3;
+
+		for (const pad of pads) {
+			try {
+				const padLayer = pad.getState_Layer?.();
+				if (padLayer === 1 && !isTopSide) continue;
+				if (padLayer === 2 && isTopSide) continue;
+
+				const x = pad.getState_X?.() ?? 0;
+				const y = pad.getState_Y?.() ?? 0;
+				const rotation = pad.getState_Rotation?.() ?? 0;
+				const padShape = pad.getState_Pad?.();
+
+				if (!padShape || padShape.length < 2)
+					continue;
+
+				const shapeType = padShape[0];
+				const negateBisector = (shapeType !== 'OVAL');
+
+				if (shapeType === 'POLYGON') {
+					const polyData = padShape[1] as (number | string)[];
+					if (polyData && polyData.length >= 4) {
+						const pts = sourceArrayToPoints(polyData);
+						if (pts.length >= 3) {
+							result.push({ polygon: pointsToSourceArray(pts), negateBisector });
+						}
+					}
+					continue;
+				}
+
+				const rotationDeg = rotation * 180 / Math.PI;
+				const points = createPadPolygon(padShape, x, y, rotationDeg);
+				if (points && points.length >= 3) {
+					result.push({ polygon: pointsToSourceArray(points), negateBisector });
+				}
+			}
+			catch (e) {
+				console.warn(TAG, 'Failed to process component pad:', e);
+			}
+		}
+		console.warn(TAG, `Component pads: ${pads.length} total, ${result.length} valid on layer`);
+	}
+	catch (e) {
+		console.error(TAG, 'Failed to get component pads:', e);
 	}
 	return result;
 }
@@ -574,18 +742,16 @@ export async function getSilkscreenTextBoxesWithRotation(targetLayer: number, ga
  * Fetches ALL polylines then filters by layer manually
  * Each polyline segment is expanded to a rounded-end shape (rectangle + semicircle caps)
  */
-export async function getLinePolygons(layer: number): Promise<(number | string)[][]> {
-	const polygons: (number | string)[][] = [];
+export async function getLinePolygons(layer: number): Promise<{ polygon: (number | string)[]; negateBisector: boolean }[]> {
+	const result: { polygon: (number | string)[]; negateBisector: boolean }[] = [];
 	const LNAME = (l: number) => l === 1 ? 'TOP_COPPER' : l === 2 ? 'BOTTOM_COPPER' : l === 3 ? 'TOP_SILK' : l === 4 ? 'BOTTOM_SILK' : String(l);
 	try {
-		// Fetch ALL polylines without layer filter, then manually filter by layer
 		const allPolylines = await eda.pcb_PrimitivePolyline.getAll();
 		if (!allPolylines || allPolylines.length === 0) {
 			console.warn(TAG, `No polylines found at all`);
-			return polygons;
+			return result;
 		}
 
-		// Filter by target layer
 		const polylines = allPolylines.filter((p: any) => {
 			const l = p.layer ?? (p.getState_Layer ? p.getState_Layer() : undefined);
 			return l === layer;
@@ -599,114 +765,75 @@ export async function getLinePolygons(layer: number): Promise<(number | string)[
 				const r = lineWidth / 2;
 				if (r < 1) continue;
 
-				// Get polyline source array
 				const polygon = (polyline as any).getState_Polygon?.();
 				if (!polygon) continue;
 
 				const source = polygon.getSource?.();
-				if (!source || source.length < 4) continue;
+				if (!source || source.length < 2) continue;
 
-				// Parse source array: [x1, y1, "L", x2, y2, ...] or [x1, y1, x2, y2]
-				const points: Point[] = [];
-				for (let i = 0; i < source.length; i++) {
-					if (typeof source[i] === 'number' && typeof source[i + 1] === 'number') {
-						points.push({ x: source[i] as number, y: source[i + 1] as number });
-						i++; // Skip next number
-					}
-				}
+				const firstCmd = source.find((s: any) => typeof s === 'string');
 
-				if (points.length < 2) continue;
-
-				// 2-point polyline: single line segment → create rounded capsule directly
-				if (points.length === 2) {
-					const p1 = points[0];
-					const p2 = points[1];
-					const x1 = p1.x;
-					const y1 = p1.y;
-					const x2 = p2.x;
-					const y2 = p2.y;
-					const dx = x2 - x1;
-					const dy = y2 - y1;
-					const len = Math.sqrt(dx * dx + dy * dy);
-					if (len < 1) continue;
-					const ux = dx / len;
-					const uy = dy / len;
-					const nx = -uy;
-					const ny = ux;
-					const pts: Point[] = [];
-					const capSegments = 8;
-					for (let j = 0; j <= capSegments; j++) {
-						const angle = Math.PI / 2 + (j / capSegments) * Math.PI;
-						pts.push({
-							x: x1 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
-							y: y1 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
-						});
-					}
-					for (let j = 0; j <= capSegments; j++) {
-						const angle = -Math.PI / 2 + (j / capSegments) * Math.PI;
-						pts.push({
-							x: x2 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
-							y: y2 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
-						});
-					}
-					if (pts.length >= 3) {
-						polygons.push(pointsToSourceArray(pts));
+				if (firstCmd === 'CIRCLE') {
+					const idx = source.indexOf('CIRCLE');
+					if (idx >= 0 && idx + 3 < source.length) {
+						const ccx = source[idx + 1] as number;
+						const ccy = source[idx + 2] as number;
+						const cr = source[idx + 3] as number;
+						const points = createCirclePolygon(ccx, ccy, cr + r, 24);
+						if (points.length >= 3) {
+							result.push({ polygon: pointsToSourceArray(points), negateBisector: false });
+						}
 					}
 					continue;
 				}
 
-				// Multi-segment polyline: process each segment
+				if (firstCmd === 'R') {
+					const idx = source.indexOf('R');
+					if (idx >= 0 && idx + 4 < source.length) {
+						const rx = source[idx + 1] as number;
+						const ry = source[idx + 2] as number;
+						const rw = source[idx + 3] as number;
+						const rh = source[idx + 4] as number;
+						let rot = 0;
+						if (idx + 5 < source.length && typeof source[idx + 5] === 'number')
+							rot = source[idx + 5] as number;
+						// Expand by lineWidth/2 in each direction, rotate around (rx, ry)
+						const rad = rot * Math.PI / 180;
+						const cos = Math.cos(rad);
+						const sin = Math.sin(rad);
+						const corners = [
+							{ x: -r, y: -r },
+							{ x: rw + r, y: -r },
+							{ x: rw + r, y: rh + r },
+							{ x: -r, y: rh + r },
+						];
+						const points: Point[] = corners.map(c => ({
+							x: rx + c.x * cos - c.y * sin,
+							y: ry + c.x * sin + c.y * cos,
+						}));
+						result.push({ polygon: pointsToSourceArray(points), negateBisector: false });
+					}
+					continue;
+				}
+
+				const points = sourceArrayToPoints(source);
+				if (points.length < 2) continue;
+
 				for (let i = 0; i < points.length - 1; i++) {
-					const p1 = points[i];
-					const p2 = points[i + 1];
-					const x1 = p1.x;
-					const y1 = p1.y;
-					const x2 = p2.x;
-					const y2 = p2.y;
-
-					const dx = x2 - x1;
-					const dy = y2 - y1;
-					const len = Math.sqrt(dx * dx + dy * dy);
-					if (len < 1) continue;
-
-					const ux = dx / len;
-					const uy = dy / len;
-					const nx = -uy;
-					const ny = ux;
-
-					const pts: Point[] = [];
-					const capSegments = 8;
-
-					for (let j = 0; j <= capSegments; j++) {
-						const angle = Math.PI / 2 + (j / capSegments) * Math.PI;
-						pts.push({
-							x: x1 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
-							y: y1 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
-						});
-					}
-					for (let j = 0; j <= capSegments; j++) {
-						const angle = -Math.PI / 2 + (j / capSegments) * Math.PI;
-						pts.push({
-							x: x2 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
-							y: y2 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
-						});
-					}
-
-					if (pts.length >= 3) {
-						polygons.push(pointsToSourceArray(pts));
-					}
+					const pts = createLineCapsule(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, lineWidth);
+					if (pts) result.push({ polygon: pointsToSourceArray(pts), negateBisector: false });
 				}
 			}
 			catch (e) {
 				console.warn(TAG, 'Failed to process polyline:', e);
 			}
 		}
-		console.warn(TAG, `Processed ${polygons.length} line polygons on layer ${LNAME(layer)}`);
+		console.warn(TAG, `Processed ${result.length} line polygons on layer ${LNAME(layer)}`);
 	}
 	catch (e) {
 		console.error(TAG, `Failed to get lines on layer ${LNAME(layer)}:`, e);
 	}
-	return polygons;
+	return result;
 }
 
 /**
@@ -718,69 +845,55 @@ export async function getTrackPolygons(layer: number): Promise<(number | string)
 	const polygons: (number | string)[][] = [];
 	const LNAME = (l: number) => l === 1 ? 'TOP_COPPER' : l === 2 ? 'BOTTOM_COPPER' : l === 3 ? 'TOP_SILK' : l === 4 ? 'BOTTOM_SILK' : String(l);
 	try {
-		// Fetch ALL tracks without layer filter, then manually filter by layer
-		const allTracks = await eda.pcb_PrimitiveLine.getAll();
-		if (!allTracks || allTracks.length === 0) {
-			console.warn(TAG, `No tracks found at all`);
-			return polygons;
-		}
+		const [allTracks, allArcs] = await Promise.all([
+			eda.pcb_PrimitiveLine.getAll().catch(() => []),
+			eda.pcb_PrimitiveArc.getAll().catch(() => []),
+		]);
 
-		// Filter by target layer
-		const tracks = allTracks.filter((t: any) => {
+		// Straight tracks
+		const tracks = (allTracks || []).filter((t: any) => {
 			const l = t.layer ?? (t.getState_Layer ? t.getState_Layer() : undefined);
 			return l === layer;
 		});
 
-		console.warn(TAG, `Found ${allTracks.length} total tracks, ${tracks.length} on layer ${LNAME(layer)}`);
-
 		for (const track of tracks) {
 			try {
-				// Get coordinates: bridge returns plain objects with direct properties
 				const x1 = (track as any).startX ?? (track as any).x1 ?? (track.getState_StartX ? track.getState_StartX() : 0);
 				const y1 = (track as any).startY ?? (track as any).y1 ?? (track.getState_StartY ? track.getState_StartY() : 0);
 				const x2 = (track as any).endX ?? (track as any).x2 ?? (track.getState_EndX ? track.getState_EndX() : 0);
 				const y2 = (track as any).endY ?? (track as any).y2 ?? (track.getState_EndY ? track.getState_EndY() : 0);
 				const lineWidth = (track as any).lineWidth ?? (track.getState_LineWidth ? track.getState_LineWidth() : 0);
-				const r = lineWidth / 2;
-				if (r < 1) continue;
-
-				const dx = x2 - x1;
-				const dy = y2 - y1;
-				const len = Math.sqrt(dx * dx + dy * dy);
-				if (len < 1) continue;
-
-				const ux = dx / len;
-				const uy = dy / len;
-				const nx = -uy;
-				const ny = ux;
-
-				const pts: Point[] = [];
-				const capSegments = 8;
-
-				for (let j = 0; j <= capSegments; j++) {
-					const angle = Math.PI / 2 + (j / capSegments) * Math.PI;
-					pts.push({
-						x: x1 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
-						y: y1 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
-					});
-				}
-				for (let j = 0; j <= capSegments; j++) {
-					const angle = -Math.PI / 2 + (j / capSegments) * Math.PI;
-					pts.push({
-						x: x2 + r * (Math.cos(angle) * ux + Math.sin(angle) * nx),
-						y: y2 + r * (Math.cos(angle) * uy + Math.sin(angle) * ny),
-					});
-				}
-
-				if (pts.length >= 3) {
-					polygons.push(pointsToSourceArray(pts));
-				}
+				const pts = createLineCapsule(x1, y1, x2, y2, lineWidth);
+				if (pts) polygons.push(pointsToSourceArray(pts));
 			}
 			catch (e) {
 				console.warn(TAG, 'Failed to process track:', e);
 			}
 		}
-		console.warn(TAG, `Processed ${polygons.length} track polygons on layer ${LNAME(layer)}`);
+
+		// Arc tracks
+		const arcs = (allArcs || []).filter((a: any) => {
+			const l = a.layer ?? (a.getState_Layer ? a.getState_Layer() : undefined);
+			return l === layer;
+		});
+
+		for (const arc of arcs) {
+			try {
+				const x1 = (arc as any).startX ?? (arc.getState_StartX ? arc.getState_StartX() : 0);
+				const y1 = (arc as any).startY ?? (arc.getState_StartY ? arc.getState_StartY() : 0);
+				const x2 = (arc as any).endX ?? (arc.getState_EndX ? arc.getState_EndX() : 0);
+				const y2 = (arc as any).endY ?? (arc.getState_EndY ? arc.getState_EndY() : 0);
+				const arcAngle = (arc as any).arcAngle ?? (arc.getState_ArcAngle ? arc.getState_ArcAngle() : 0);
+				const lineWidth = (arc as any).lineWidth ?? (arc.getState_LineWidth ? arc.getState_LineWidth() : 0);
+				const pts = createArcCapsule(x1, y1, x2, y2, arcAngle, lineWidth);
+				if (pts) polygons.push(pointsToSourceArray(pts));
+			}
+			catch (e) {
+				console.warn(TAG, 'Failed to process arc track:', e);
+			}
+		}
+
+		console.warn(TAG, `Tracks on ${LNAME(layer)}: ${tracks.length} lines + ${arcs.length} arcs → ${polygons.length} polygons`);
 	}
 	catch (e) {
 		console.error(TAG, `Failed to get tracks on layer ${LNAME(layer)}:`, e);

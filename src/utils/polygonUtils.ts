@@ -151,34 +151,114 @@ export function sourceArrayToPoints(sourceArray: (number | string)[]): Point[] {
 				}
 			}
 			else if (item === 'ARC') {
-				// ARC angle endX endY - skip arc, just add endpoint
-				if (i + 3 < sourceArray.length) {
-					points.push({ x: sourceArray[i + 2] as number, y: sourceArray[i + 3] as number });
+				// ARC angle endX endY — approximate arc with line segments
+				if (i + 3 < sourceArray.length && points.length > 0) {
+					const sweepDeg = sourceArray[i + 1] as number;
+					const endX = sourceArray[i + 2] as number;
+					const endY = sourceArray[i + 3] as number;
 					i += 4;
+
+					const prev = points[points.length - 1];
+					const sweepRad = sweepDeg * Math.PI / 180;
+
+					if (Math.abs(sweepDeg) < 0.1) {
+						points.push({ x: endX, y: endY });
+					}
+					else {
+						const dx = endX - prev.x;
+						const dy = endY - prev.y;
+						const chordLen = Math.sqrt(dx * dx + dy * dy);
+						const halfAngle = sweepRad / 2;
+						const sinHalf = Math.sin(halfAngle);
+
+						if (chordLen < 1e-6 || Math.abs(sinHalf) < 1e-6) {
+							points.push({ x: endX, y: endY });
+						}
+						else {
+							const radius = chordLen / (2 * Math.abs(sinHalf));
+							const d = radius * Math.cos(halfAngle);
+							const mx = (prev.x + endX) / 2;
+							const my = (prev.y + endY) / 2;
+							const px = -dy / chordLen;
+							const py = dx / chordLen;
+							const centerSign = sweepDeg > 0 ? 1 : -1;
+							const cx = mx + px * d * centerSign;
+							const cy = my + py * d * centerSign;
+
+							const startA = Math.atan2(prev.y - cy, prev.x - cx);
+							const endA = Math.atan2(endY - cy, endX - cx);
+							let sweep = endA - startA;
+							if (sweepDeg > 0) {
+								while (sweep < 0) sweep += 2 * Math.PI;
+							}
+							else {
+								while (sweep > 0) sweep -= 2 * Math.PI;
+							}
+
+							const segments = Math.max(4, Math.ceil(Math.abs(sweepDeg) / 10));
+							for (let s = 1; s <= segments; s++) {
+								const t = s / segments;
+								const a = startA + t * sweep;
+								points.push({ x: cx + radius * Math.cos(a), y: cy + radius * Math.sin(a) });
+							}
+						}
+					}
 				}
 				else {
 					i++;
 				}
 			}
 			else if (item === 'CARC') {
-				// CARC = Center-arc: cx cy radius startAngle endAngle (clockwise)
-				// Approximate with line segments
-				if (i + 5 < sourceArray.length) {
-					const cx = sourceArray[i + 1] as number;
-					const cy = sourceArray[i + 2] as number;
-					const radius = sourceArray[i + 3] as number;
-					const startAngle = sourceArray[i + 4] as number;
-					const endAngle = sourceArray[i + 5] as number;
-					i += 6;
-					if (radius > 0) {
-						const segments = Math.max(4, Math.ceil(Math.abs(endAngle - startAngle) / 15));
-						for (let s = 0; s <= segments; s++) {
-							const t = s / segments;
-							const angle = (startAngle + t * (endAngle - startAngle)) * Math.PI / 180;
-							points.push({
-								x: cx + radius * Math.cos(angle),
-								y: cy + radius * Math.sin(angle),
-							});
+				// CARC angle endX endY — same format as ARC (center-arc interactive mode)
+				if (i + 3 < sourceArray.length && points.length > 0) {
+					const sweepDeg = sourceArray[i + 1] as number;
+					const endX = sourceArray[i + 2] as number;
+					const endY = sourceArray[i + 3] as number;
+					i += 4;
+
+					const prev = points[points.length - 1];
+					const sweepRad = sweepDeg * Math.PI / 180;
+
+					if (Math.abs(sweepDeg) < 0.1) {
+						points.push({ x: endX, y: endY });
+					}
+					else {
+						const dx = endX - prev.x;
+						const dy = endY - prev.y;
+						const chordLen = Math.sqrt(dx * dx + dy * dy);
+						const halfAngle = sweepRad / 2;
+						const sinHalf = Math.sin(halfAngle);
+
+						if (chordLen < 1e-6 || Math.abs(sinHalf) < 1e-6) {
+							points.push({ x: endX, y: endY });
+						}
+						else {
+							const radius = chordLen / (2 * Math.abs(sinHalf));
+							const d = radius * Math.cos(halfAngle);
+							const mx = (prev.x + endX) / 2;
+							const my = (prev.y + endY) / 2;
+							const px = -dy / chordLen;
+							const py = dx / chordLen;
+							const centerSign = sweepDeg > 0 ? 1 : -1;
+							const cx = mx + px * d * centerSign;
+							const cy = my + py * d * centerSign;
+
+							const startA = Math.atan2(prev.y - cy, prev.x - cx);
+							const endA = Math.atan2(endY - cy, endX - cx);
+							let sweep = endA - startA;
+							if (sweepDeg > 0) {
+								while (sweep < 0) sweep += 2 * Math.PI;
+							}
+							else {
+								while (sweep > 0) sweep -= 2 * Math.PI;
+							}
+
+							const segments = Math.max(4, Math.ceil(Math.abs(sweepDeg) / 10));
+							for (let s = 1; s <= segments; s++) {
+								const t = s / segments;
+								const a = startA + t * sweep;
+								points.push({ x: cx + radius * Math.cos(a), y: cy + radius * Math.sin(a) });
+							}
 						}
 					}
 				}
@@ -228,24 +308,20 @@ export function sourceArrayToPoints(sourceArray: (number | string)[]): Point[] {
 							rotation = sourceArray[i] as number;
 						i++;
 					}
-					// (rx, ry) is the top-left corner of the unrotated rectangle
-					const cx = rx + rw / 2;
-					const cy = ry - rh / 2;
-					const hw = rw / 2;
-					const hh = rh / 2;
+					// (rx, ry) is the top-left corner, rotation around (rx, ry), height goes downward
 					const rad = (rotation * Math.PI) / 180;
 					const cos = Math.cos(rad);
 					const sin = Math.sin(rad);
 					const corners = [
-						{ x: -hw, y: -hh },
-						{ x: hw, y: -hh },
-						{ x: hw, y: hh },
-						{ x: -hw, y: hh },
+						{ x: 0, y: 0 },
+						{ x: rw, y: 0 },
+						{ x: rw, y: rh },
+						{ x: 0, y: rh },
 					];
 					for (const c of corners) {
 						points.push({
-							x: cx + c.x * cos - c.y * sin,
-							y: cy + c.x * sin + c.y * cos,
+							x: rx + c.x * cos - c.y * sin,
+							y: ry + c.x * sin + c.y * cos,
 						});
 					}
 				}

@@ -94,6 +94,7 @@
     <div class="options-title">避让对象:</div>
     <div class="options-grid">
       <label class="opt-item"><input type="checkbox" id="optSelectAll" /> 全选</label>
+      <label class="opt-item"><input type="checkbox" id="optComponentBBox" checked /> 封装</label>
       <label class="opt-item"><input type="checkbox" id="optVias" checked /> 过孔</label>
       <label class="opt-item"><input type="checkbox" id="optPads" checked /> 游离焊盘</label>
       <label class="opt-item"><input type="checkbox" id="optCutouts" checked /> 挖槽区域</label>
@@ -119,6 +120,7 @@
     var layerBottom = document.getElementById('layerBottom');
 
     var optSelectAll = document.getElementById('optSelectAll');
+    var optComponentBBox = document.getElementById('optComponentBBox');
     var optVias = document.getElementById('optVias');
     var optPads = document.getElementById('optPads');
     var optCutouts = document.getElementById('optCutouts');
@@ -130,6 +132,7 @@
 
     optSelectAll.addEventListener('change', function() {
       var checked = optSelectAll.checked;
+      optComponentBBox.checked = checked;
       optVias.checked = checked;
       optPads.checked = checked;
       optCutouts.checked = checked;
@@ -149,6 +152,7 @@
         gap: gap,
         layer: layer,
         options: {
+          componentBBox: optComponentBBox.checked,
           vias: optVias.checked,
           pads: optPads.checked,
           cutouts: optCutouts.checked,
@@ -191,6 +195,7 @@
         type: 'fillAvoid',
         gap: gap,
         options: {
+          componentBBox: optComponentBBox.checked,
           vias: optVias.checked,
           pads: optPads.checked,
           cutouts: optCutouts.checked,
@@ -215,6 +220,7 @@
     function resetUI() {
       resetDrawingState();
       optSelectAll.checked = false;
+      optComponentBBox.checked = true;
       optVias.checked = true;
       optPads.checked = true;
       optCutouts.checked = true;

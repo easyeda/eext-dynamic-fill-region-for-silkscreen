@@ -308,15 +308,15 @@ export function sourceArrayToPoints(sourceArray: (number | string)[]): Point[] {
 							rotation = sourceArray[i] as number;
 						i++;
 					}
-					// (rx, ry) is the top-left corner, rotation around (rx, ry), height goes downward
+					// (rx, ry) is the start point, height goes upward (Y decreases), rotation around (rx, ry)
 					const rad = (rotation * Math.PI) / 180;
 					const cos = Math.cos(rad);
 					const sin = Math.sin(rad);
 					const corners = [
 						{ x: 0, y: 0 },
 						{ x: rw, y: 0 },
-						{ x: rw, y: rh },
-						{ x: 0, y: rh },
+						{ x: rw, y: -rh },
+						{ x: 0, y: -rh },
 					];
 					for (const c of corners) {
 						points.push({

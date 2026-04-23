@@ -788,30 +788,52 @@ export async function getLinePolygons(layer: number): Promise<{ polygon: (number
 				}
 
 				if (firstCmd === 'R') {
-					const idx = source.indexOf('R');
-					if (idx >= 0 && idx + 4 < source.length) {
-						const rx = source[idx + 1] as number;
-						const ry = source[idx + 2] as number;
-						const rw = source[idx + 3] as number;
-						const rh = source[idx + 4] as number;
-						let rot = 0;
-						if (idx + 5 < source.length && typeof source[idx + 5] === 'number')
-							rot = source[idx + 5] as number;
-						// Expand by lineWidth/2 in each direction, rotate around (rx, ry)
-						const rad = rot * Math.PI / 180;
-						const cos = Math.cos(rad);
-						const sin = Math.sin(rad);
-						const corners = [
-							{ x: -r, y: -r },
-							{ x: rw + r, y: -r },
-							{ x: rw + r, y: rh + r },
-							{ x: -r, y: rh + r },
-						];
-						const points: Point[] = corners.map(c => ({
-							x: rx + c.x * cos - c.y * sin,
-							y: ry + c.x * sin + c.y * cos,
-						}));
-						result.push({ polygon: pointsToSourceArray(points), negateBisector: false });
+					const pts = sourceArrayToPoints(source);
+					if (pts.length === 4) {
+						// Compute centroid
+						let cx = 0, cy = 0;
+						for (const p of pts) { cx += p.x; cy += p.y; }
+						cx /= 4; cy /= 4;
+						const expanded: Point[] = [];
+						const n = pts.length;
+						for (let j = 0; j < n; j++) {
+							const prev = pts[(j - 1 + n) % n];
+							const curr = pts[j];
+							const next = pts[(j + 1) % n];
+							const e1x = curr.x - prev.x, e1y = curr.y - prev.y;
+							const e2x = next.x - curr.x, e2y = next.y - curr.y;
+							const len1 = Math.sqrt(e1x * e1x + e1y * e1y);
+							const len2 = Math.sqrt(e2x * e2x + e2y * e2y);
+							if (len1 < 1e-6 || len2 < 1e-6) { expanded.push(curr); continue; }
+							// Try both normal directions, pick the one pointing away from centroid
+							let n1x = -e1y / len1, n1y = e1x / len1;
+							const testX = curr.x + n1x;
+							const testY = curr.y + n1y;
+							const distBefore = (curr.x - cx) ** 2 + (curr.y - cy) ** 2;
+							const distAfter = (testX - cx) ** 2 + (testY - cy) ** 2;
+							if (distAfter < distBefore) {
+								n1x = -n1x; n1y = -n1y;
+							}
+							let n2x = -e2y / len2, n2y = e2x / len2;
+							const test2X = curr.x + n2x;
+							const test2Y = curr.y + n2y;
+							const dist2After = (test2X - cx) ** 2 + (test2Y - cy) ** 2;
+							if (dist2After < distBefore) {
+								n2x = -n2x; n2y = -n2y;
+							}
+							const bx = n1x + n2x, by = n1y + n2y;
+							const blen = Math.sqrt(bx * bx + by * by);
+							if (blen < 1e-6) {
+								expanded.push({ x: curr.x + n1x * r, y: curr.y + n1y * r });
+							}
+							else {
+								const dot = n1x * n2x + n1y * n2y;
+								const cosHalf = Math.sqrt(Math.max(0, (1 + dot) / 2));
+								const offset = cosHalf > 0.01 ? r / cosHalf : r;
+								expanded.push({ x: curr.x + (bx / blen) * offset, y: curr.y + (by / blen) * offset });
+							}
+						}
+						result.push({ polygon: pointsToSourceArray(expanded), negateBisector: false });
 					}
 					continue;
 				}

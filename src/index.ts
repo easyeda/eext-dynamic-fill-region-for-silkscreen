@@ -7,7 +7,7 @@
 
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
-import { getAllComponents, getComponentObstacles, getComponentPadPolygons, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
+import { getAllComponents, getComponentObstacles, getComponentPadPolygons, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/obstacleCollector';
 import { clipObstaclesToRegionWithMeta, mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
 import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';

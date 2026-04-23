@@ -28,18 +28,6 @@ function ringToPoints(ring: [number, number][]): Point[] {
 }
 
 /**
- * Calculate area of a closed ring using shoelace formula
- */
-function ringArea(ring: [number, number][]): number {
-	let area = 0;
-	for (let i = 0; i < ring.length - 1; i++) {
-		area += ring[i][0] * ring[i + 1][1];
-		area -= ring[i + 1][0] * ring[i][1];
-	}
-	return Math.abs(area) / 2;
-}
-
-/**
  * Merge overlapping obstacle polygons using polyclip-ts union.
  *
  * Steps:
@@ -108,12 +96,8 @@ export function mergeOverlappingObstacles(
 		}
 
 		try {
-			// Chain union all polygons in this group
-			let current: Geom = [pointsToRing(obstacles[indices[0]])];
-			for (let k = 1; k < indices.length; k++) {
-				const next: Geom = [pointsToRing(obstacles[indices[k]])];
-				current = union(current, next);
-			}
+			const geoms: Geom[] = indices.map(idx => [pointsToRing(obstacles[idx])]);
+			const current = union(geoms[0], ...geoms.slice(1));
 
 			// Extract result polygons
 			for (const poly of current) {
@@ -137,124 +121,60 @@ export function mergeOverlappingObstacles(
 	return merged;
 }
 
+export interface ClipMeta {
+	rotation: number;
+	negateBisector: boolean;
+	extraGap: number;
+}
+
+export interface ClippedObstacle extends ClipMeta {
+	points: Point[];
+}
+
 /**
- * Clip obstacles to only keep the portions inside the user-drawn region.
- * Obstacles completely outside the region are discarded.
- * Obstacles partially inside are clipped to the intersection.
+ * Clip obstacles to region with metadata preservation.
+ * Computes regionGeom/regionBB once, AABB pre-filters, and tracks source metadata.
  */
-export function clipObstaclesToRegion(
+export async function clipObstaclesToRegionWithMeta(
 	obstacles: Point[][],
+	metadata: ClipMeta[],
 	region: Point[],
-): Point[][] {
+	onProgress?: (done: number, total: number) => void,
+	batchSize: number = 50,
+): Promise<ClippedObstacle[]> {
 	if (obstacles.length === 0)
-		return obstacles;
+		return [];
 
 	const regionGeom: Geom = [pointsToRing(region)];
 	const regionBB = calculateBoundingBox(region);
-	const result: Point[][] = [];
+	const result: ClippedObstacle[] = [];
 
-	for (const obs of obstacles) {
+	for (let i = 0; i < obstacles.length; i++) {
 		try {
-			// AABB quick reject
-			const obsBB = calculateBoundingBox(obs);
-			if (obsBB.maxX < regionBB.minX || regionBB.maxX < obsBB.minX)
-				continue;
-			if (obsBB.maxY < regionBB.minY || regionBB.maxY < obsBB.minY)
+			const obsBB = calculateBoundingBox(obstacles[i]);
+			if (!aabbIntersects(obsBB, regionBB))
 				continue;
 
-			const obsGeom: Geom = [pointsToRing(obs)];
+			const obsGeom: Geom = [pointsToRing(obstacles[i])];
 			const clipped = intersection(regionGeom, obsGeom);
 
 			for (const poly of clipped) {
-				if (poly.length > 0) {
-					const outerRing = poly[0];
-					if (outerRing.length >= 4) {
-						result.push(ringToPoints(outerRing));
-					}
+				if (poly.length > 0 && poly[0].length >= 4) {
+					result.push({ points: ringToPoints(poly[0]), ...metadata[i] });
 				}
 			}
 		}
 		catch (e) {
-			// If intersection fails, keep the obstacle (conservative)
-			result.push(obs);
+			result.push({ points: obstacles[i], ...metadata[i] });
+		}
+
+		if ((i + 1) % batchSize === 0) {
+			onProgress?.(i + 1, obstacles.length);
+			await new Promise<void>(r => setTimeout(r, 0));
 		}
 	}
-
+	onProgress?.(obstacles.length, obstacles.length);
 	return result;
-}
-
-/**
- * Boolean difference: user region minus merged holes.
- * Uses polyclip-ts difference to cleanly subtract holes from the region.
- * Returns an array of result polygons, each as Point[].
- * Each result polygon has an outer ring and zero or more inner rings (holes).
- */
-export function subtractHolesFromRegion(
-	region: Point[],
-	holes: Point[][],
-): { outer: Point[]; holes: Point[][] }[] {
-	const regionRing = pointsToRing(region);
-
-	if (holes.length === 0) {
-		return [{ outer: region, holes: [] }];
-	}
-
-	// Build region as a Poly (one outer ring)
-	const regionPoly: Geom = [regionRing];
-
-	// Build each hole as a separate Poly, pass them all to difference
-	const holePolys: Geom[] = holes.map(hole => [pointsToRing(hole)]);
-
-	let resultGeom: Geom;
-	try {
-		resultGeom = difference(regionPoly, ...holePolys);
-	}
-	catch (e) {
-		console.warn(TAG, 'Difference with all holes failed, trying incremental approach:', e);
-		// Fallback: add holes one by one, skip those that cause failure
-		resultGeom = regionPoly;
-		let skipped = 0;
-		for (const holePoly of holePolys) {
-			try {
-				resultGeom = difference(resultGeom, holePoly);
-			}
-			catch (e2) {
-				skipped++;
-				console.warn(TAG, 'Skipping hole due to difference failure:', e2);
-			}
-		}
-		if (skipped > 0) {
-			console.warn(TAG, `Skipped ${skipped} hole(s) that caused difference failure`);
-		}
-		// If all holes were skipped, return original region
-		if (resultGeom === regionPoly && skipped === holePolys.length) {
-			return [{ outer: region, holes: [] }];
-		}
-	}
-
-	console.warn(TAG, `Difference returned ${resultGeom.length} polygon(s)`);
-
-	const results: { outer: Point[]; holes: Point[][] }[] = [];
-	for (const poly of resultGeom) {
-		if (poly.length === 0)
-			continue;
-		const outerRing = poly[0];
-		if (outerRing.length < 4)
-			continue;
-
-		const outer = ringToPoints(outerRing);
-		const innerHoles: Point[][] = [];
-		for (let i = 1; i < poly.length; i++) {
-			const innerRing = poly[i];
-			if (innerRing.length >= 4) {
-				innerHoles.push(ringToPoints(innerRing));
-			}
-		}
-		console.warn(TAG, `Result poly: outer=${outer.length} pts, holes=${innerHoles.length}`);
-		results.push({ outer, holes: innerHoles });
-	}
-
-	return results;
 }
 
 /**

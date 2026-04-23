@@ -8,7 +8,7 @@
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
 import { getAllComponents, getComponentObstacles, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/componentData';
-import { clipObstaclesToRegion, mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
+import { clipObstaclesToRegionWithMeta, mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
 import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';
 import { aabbIntersects, calculateBoundingBox, ensureClockwise, ensureCounterClockwise, pointsToSourceArray, sourceArrayToPoints } from './utils/polygonUtils';
@@ -285,49 +285,11 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 			results = [{ outer: fillPoints, holes: [] }];
 		}
 		else {
-			// 步骤3：逐个裁剪到填充区域内，保留原始索引的旋转/方向/间隙参数
 			const fillRegionCW = ensureClockwise(fillPoints);
-			const clippedWithMeta: { points: Point[]; rotation: number; negateBisector: boolean; extraGap: number }[] = [];
-			for (let i = 0; i < obstaclePoints.length; i++) {
-				const clipped = clipObstaclesToRegion([obstaclePoints[i]], fillRegionCW);
-				for (const pts of clipped) {
-					clippedWithMeta.push({
-						points: pts,
-						rotation: obstacleRotations[i],
-						negateBisector: obstacleNegateBisector[i],
-						extraGap: obstacleExtraGaps[i],
-					});
-				}
-			}
-			console.warn(TAG, 'handleFillAvoid: Clip to region', obstaclePoints.length, '→', clippedWithMeta.length, 'obstacles');
-
-			// 步骤4：对裁剪后的障碍物进行外扩
-			const offsetPoints = offsetObstacles(clippedWithMeta);
-
-			// 步骤5：AABB 预过滤
-			const fillBB = calculateBoundingBox(fillPoints);
-			const maxExtraGap = Math.max(...clippedWithMeta.map(m => m.extraGap), gap);
-			const fillBBExpanded = {
-				minX: fillBB.minX - maxExtraGap,
-				minY: fillBB.minY - maxExtraGap,
-				maxX: fillBB.maxX + maxExtraGap,
-				maxY: fillBB.maxY + maxExtraGap,
-			};
-			const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), fillBBExpanded));
-			console.warn(TAG, 'handleFillAvoid: AABB filter', offsetPoints.length, '→', aabbFiltered.length, 'holes');
-
-			// 步骤5b：合并重叠洞
-			const mergedHoles = mergeOverlappingObstacles(aabbFiltered);
-			console.warn(TAG, 'handleFillAvoid: Merge', aabbFiltered.length, '→', mergedHoles.length, 'holes');
-
-			// 步骤6：执行布尔差运算
-			results = await subtractHolesFromRegionIncremental(
-				fillRegionCW, mergedHoles,
-				(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, 'info', 3),
+			results = await processObstaclePipeline(
+				fillRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
 			);
-			console.warn(TAG, 'handleFillAvoid: Boolean result:', results.length, 'polygon(s)');
 		}
-
 		// 删除原填充
 		const fillId = selectedFill.primitiveId;
 		if (fillId) {
@@ -478,13 +440,12 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 	let compDesignator = 0; let compBBox = 0;
 	for (let ci = 0; ci < components.length; ci++) {
 		const obstacles = componentObstacleResults[ci];
-		const compRotation = components[ci].getState_Rotation?.() ?? 0;
 		if (obstacles.designatorBox) {
-			allObstacles.push({ polygon: obstacles.designatorBox, rotation: compRotation, negateBisector: true });
+			allObstacles.push({ polygon: obstacles.designatorBox, rotation: 0, negateBisector: true });
 			compDesignator++;
 		}
 		if (obstacles.componentBBox) {
-			allObstacles.push({ polygon: obstacles.componentBBox, rotation: compRotation, negateBisector: false });
+			allObstacles.push({ polygon: obstacles.componentBBox, rotation: 0, negateBisector: false });
 			compBBox++;
 		}
 	}
@@ -609,55 +570,16 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			return true;
 		}
 
-		// 步骤 3：逐个裁剪到用户多边形区域内，保留原始索引的旋转/方向/间隙参数
+		// 步骤 3-6：裁剪→外扩→AABB过滤→合并→布尔差集
 		const userRegionCW = ensureClockwise(userPoints);
-		const clippedWithMeta: { points: Point[]; rotation: number; negateBisector: boolean; extraGap: number }[] = [];
-		for (let i = 0; i < obstaclePoints.length; i++) {
-			const clipped = clipObstaclesToRegion([obstaclePoints[i]], userRegionCW);
-			for (const pts of clipped) {
-				clippedWithMeta.push({
-					points: pts,
-					rotation: obstacleRotations[i],
-					negateBisector: obstacleNegateBisector[i],
-					extraGap: obstacleExtraGaps[i],
-				});
-			}
-		}
-		console.warn(TAG, `Clip to region: ${obstaclePoints.length} → ${clippedWithMeta.length} obstacles`);
-
-		// 步骤 4：根据间隙外扩
-		console.warn(TAG, `Offset step: gap=${gap}, obstacleCount=${clippedWithMeta.length}`);
-		const offsetPoints = offsetObstacles(clippedWithMeta);
-
-		// 步骤 5：AABB 预过滤 — 只保留与用户多边形相交的洞
-		const regionBB = calculateBoundingBox(userPoints);
-		const maxExtraGap = Math.max(...clippedWithMeta.map(m => m.extraGap), gap);
-		const regionBBExpanded = {
-			minX: regionBB.minX - maxExtraGap,
-			minY: regionBB.minY - maxExtraGap,
-			maxX: regionBB.maxX + maxExtraGap,
-			maxY: regionBB.maxY + maxExtraGap,
-		};
-		const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
-		console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} holes`);
-
-		// 步骤 5b：合并重叠洞，减少布尔运算复杂度
-		const mergedHoles = mergeOverlappingObstacles(aabbFiltered);
-		console.warn(TAG, `Merge: ${aabbFiltered.length} → ${mergedHoles.length} holes`);
-
-		// 步骤 6：布尔差集
-		eda.sys_Message.showToastMessage('正在构建多边形...', 'info', 3);
-		const results = await subtractHolesFromRegionIncremental(
-			userRegionCW, mergedHoles,
-			(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, 'info', 3),
+		const results = await processObstaclePipeline(
+			userRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
 		);
 
 		if (results.length === 0) {
 			eda.sys_Message.showToastMessage('挖洞后区域为空', 'warning', 3);
 			return false;
 		}
-
-		console.warn(TAG, `Difference result: ${results.length} polygon(s)`);
 
 		// 将每个结果多边形转为 complex polygon 格式并创建填充
 		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
@@ -695,6 +617,55 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 		eda.sys_Message.showToastMessage(`错误: ${e instanceof Error ? e.message : String(e)}`, 'error', 3);
 		return false;
 	}
+}
+
+async function processObstaclePipeline(
+	regionCW: Point[],
+	obstaclePoints: Point[][],
+	obstacleRotations: number[],
+	obstacleNegateBisector: boolean[],
+	obstacleExtraGaps: number[],
+	gap: number,
+): Promise<{ outer: Point[]; holes: Point[][] }[]> {
+	// 裁剪到区域内（AABB预筛 + region转换只做一次 + 异步让出）
+	const metadata = obstaclePoints.map((_, i) => ({
+		rotation: obstacleRotations[i],
+		negateBisector: obstacleNegateBisector[i],
+		extraGap: obstacleExtraGaps[i],
+	}));
+	const clippedWithMeta = await clipObstaclesToRegionWithMeta(
+		obstaclePoints, metadata, regionCW,
+		(done, total) => eda.sys_Message.showToastMessage(`正在裁剪障碍物... (${done}/${total})`, 'info', 3),
+	);
+	console.warn(TAG, `Clip to region: ${obstaclePoints.length} → ${clippedWithMeta.length} obstacles`);
+
+	// 外扩
+	const offsetPoints = offsetObstacles(clippedWithMeta);
+
+	// AABB 预过滤
+	const regionBB = calculateBoundingBox(regionCW);
+	const maxExtraGap = Math.max(...clippedWithMeta.map(m => m.extraGap), gap);
+	const regionBBExpanded = {
+		minX: regionBB.minX - maxExtraGap,
+		minY: regionBB.minY - maxExtraGap,
+		maxX: regionBB.maxX + maxExtraGap,
+		maxY: regionBB.maxY + maxExtraGap,
+	};
+	const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
+	console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} holes`);
+
+	// 合并重叠洞
+	const mergedHoles = mergeOverlappingObstacles(aabbFiltered);
+	console.warn(TAG, `Merge: ${aabbFiltered.length} → ${mergedHoles.length} holes`);
+
+	// 布尔差集
+	eda.sys_Message.showToastMessage('正在构建多边形...', 'info', 3);
+	const results = await subtractHolesFromRegionIncremental(
+		regionCW, mergedHoles,
+		(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, 'info', 3),
+	);
+	console.warn(TAG, `Difference result: ${results.length} polygon(s)`);
+	return results;
 }
 
 /**

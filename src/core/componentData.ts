@@ -509,12 +509,41 @@ export async function getSilkscreenTextBoxesWithRotation(targetLayer: number, ga
 				if (bboxW <= 0 || bboxH <= 0)
 					continue;
 
-				// User's logic: expand bbox by gap uniformly, then rotate
-				// The offsetPolygonPoints in processPolygonFill will NOT add extra offset (rotation=0)
-				// This ensures uniform bbox expansion regardless of rotation angle
-				const expandedW = bboxW + 2 * gap;
-				const expandedH = bboxH + 2 * gap;
-				const points: Point[] = createRectanglePolygon(bboxCx, bboxCy, expandedW, expandedH, rotation);
+				// getPrimitivesBBox returns AABB of the already-rotated text.
+				// Reverse-compute original unrotated dimensions, expand by gap, then re-rotate.
+				let points: Point[];
+				if (Math.abs(rotation) < 0.01) {
+					const expandedW = bboxW + 2 * gap;
+					const expandedH = bboxH + 2 * gap;
+					points = createRectanglePolygon(bboxCx, bboxCy, expandedW, expandedH, 0);
+				}
+				else {
+					const rad = rotation * Math.PI / 180;
+					const cosR = Math.abs(Math.cos(rad));
+					const sinR = Math.abs(Math.sin(rad));
+					const denom = cosR * cosR - sinR * sinR;
+					let origW: number, origH: number;
+					if (Math.abs(denom) < 0.01) {
+						const size = Math.max(bboxW, bboxH) / (cosR + sinR);
+						origW = size;
+						origH = size;
+					}
+					else {
+						origW = (bboxW * cosR - bboxH * sinR) / denom;
+						origH = (bboxH * cosR - bboxW * sinR) / denom;
+						if (origW <= 0 || origH <= 0) {
+							origW = bboxW;
+							origH = bboxH;
+							points = createRectanglePolygon(bboxCx, bboxCy, origW + 2 * gap, origH + 2 * gap, 0);
+							if (points.length >= 3) {
+								const src = pointsToSourceArray(points);
+								result.push({ polygon: src, rotation: 0 });
+							}
+							continue;
+						}
+					}
+					points = createRectanglePolygon(bboxCx, bboxCy, origW + 2 * gap, origH + 2 * gap, rotation);
+				}
 
 				if (points.length >= 3) {
 					const src = pointsToSourceArray(points);
@@ -522,8 +551,8 @@ export async function getSilkscreenTextBoxesWithRotation(targetLayer: number, ga
 					const maxX = Math.max(...points.map(p => p.x));
 					const minY = Math.min(...points.map(p => p.y));
 					const maxY = Math.max(...points.map(p => p.y));
-					console.warn(TAG, `  Text "${text}" rot=${rotation}° origBbox=${bboxW.toFixed(0)}x${bboxH.toFixed(0)} expanded=${expandedW.toFixed(0)}x${expandedH.toFixed(0)} polyAABB=${(maxX - minX).toFixed(0)}x${(maxY - minY).toFixed(0)} center=(${bboxCx.toFixed(0)},${bboxCy.toFixed(0)})`);
-					result.push({ polygon: src, rotation });
+					console.warn(TAG, `  Text "${text}" rot=${rotation}° origBbox=${bboxW.toFixed(0)}x${bboxH.toFixed(0)} polyAABB=${(maxX - minX).toFixed(0)}x${(maxY - minY).toFixed(0)} center=(${bboxCx.toFixed(0)},${bboxCy.toFixed(0)})`);
+					result.push({ polygon: src, rotation: 0 });
 				}
 			}
 			catch (e) {

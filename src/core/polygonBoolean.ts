@@ -196,61 +196,151 @@ export async function clipObstaclesToRegionWithMeta(
 }
 
 /**
- * Boolean difference — single-shot for correctness, batched fallback if it fails.
+ * Merge overlapping holes using sweep-line grouping + per-group union.
+ * Non-overlapping holes pass through directly.
  */
-export async function subtractHolesFromRegionIncremental(
-	region: Point[],
+export async function unionAllHoles(
 	holes: Point[][],
 	onProgress?: (done: number, total: number) => void,
-): Promise<{ outer: Point[]; holes: Point[][] }[]> {
-	if (holes.length === 0)
-		return [{ outer: region, holes: [] }];
+): Promise<Point[][]> {
+	if (holes.length <= 1)
+		return holes;
 
-	const regionRing = pointsToRing(region);
-	let resultGeom: Geom = [regionRing];
-	const holePolys: Geom[] = holes.map(hole => [pointsToRing(hole)]);
+	const EPS = 2;
+	let current = holes;
+	const MAX_PASSES = 5;
 
-	// Try single-shot difference
-	try {
-		resultGeom = difference(resultGeom, ...holePolys);
-		onProgress?.(holes.length, holes.length);
-	}
-	catch (e) {
-		console.warn(TAG, 'Single-shot difference failed, trying chunked:', e);
-		// Chunked fallback: process 200 holes at a time, cumulative
-		resultGeom = [regionRing];
-		const BATCH = 200;
-		for (let i = 0; i < holePolys.length; i += BATCH) {
-			const batch = holePolys.slice(i, i + BATCH);
-			try {
-				resultGeom = difference(resultGeom, ...batch);
+	for (let pass = 0; pass < MAX_PASSES; pass++) {
+		const n = current.length;
+		const bboxes = current.map(pts => {
+			const bb = calculateBoundingBox(pts);
+			return { minX: bb.minX - EPS, minY: bb.minY - EPS, maxX: bb.maxX + EPS, maxY: bb.maxY + EPS };
+		});
+
+		const parent = Array.from({ length: n }, (_, i) => i);
+		function find(x: number): number {
+			while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+			return x;
+		}
+		function unite(a: number, b: number): void {
+			const ra = find(a), rb = find(b);
+			if (ra !== rb) parent[ra] = rb;
+		}
+
+		const events: { x: number; isStart: boolean; idx: number }[] = [];
+		for (let i = 0; i < n; i++) {
+			events.push({ x: bboxes[i].minX, isStart: true, idx: i });
+			events.push({ x: bboxes[i].maxX, isStart: false, idx: i });
+		}
+		events.sort((a, b) => a.x - b.x || (a.isStart ? -1 : 1));
+
+		const active = new Set<number>();
+		for (const ev of events) {
+			if (ev.isStart) {
+				for (const j of active) {
+					if (aabbIntersects(bboxes[ev.idx], bboxes[j])) unite(ev.idx, j);
+				}
+				active.add(ev.idx);
 			}
-			catch (e2) {
-				for (const hp of batch) {
-					try { resultGeom = difference(resultGeom, hp); }
-					catch (_) {}
+			else { active.delete(ev.idx); }
+		}
+
+		const groups = new Map<number, number[]>();
+		for (let i = 0; i < n; i++) {
+			const r = find(i);
+			if (!groups.has(r)) groups.set(r, []);
+			groups.get(r)!.push(i);
+		}
+
+		let needUnion = 0;
+		let unionFailed = 0;
+		for (const indices of groups.values()) {
+			if (indices.length > 1) needUnion++;
+		}
+
+		if (needUnion === 0) {
+			console.warn(TAG, `UnionHoles pass ${pass}: ${n} holes, no overlaps, done`);
+			break;
+		}
+
+		const merged: Point[][] = [];
+		let groupsDone = 0;
+		const totalGroups = groups.size;
+		for (const indices of groups.values()) {
+			if (indices.length === 1) {
+				merged.push(current[indices[0]]);
+				groupsDone++;
+				continue;
+			}
+
+			try {
+				const geoms: Geom[] = indices.map(idx => [pointsToRing(current[idx])]);
+				const result = union(geoms[0], ...geoms.slice(1));
+				let added = 0;
+				for (const poly of result) {
+					if (poly.length > 0 && poly[0].length >= 4) {
+						merged.push(ringToPoints(poly[0]));
+						added++;
+					}
+				}
+				if (added === 0) {
+					console.warn(TAG, `UnionHoles pass ${pass}: group of ${indices.length} produced 0 polygons, keeping originals`);
+					for (const idx of indices) merged.push(current[idx]);
 				}
 			}
-			onProgress?.(Math.min(i + BATCH, holes.length), holes.length);
-			await new Promise<void>(r => setTimeout(r, 0));
+			catch (e) {
+				console.warn(TAG, `UnionHoles pass ${pass}: tree-merge for failed group of ${indices.length}`);
+				let pool: Geom[] = indices.map(idx => [pointsToRing(current[idx])]);
+				const MERGE_SIZE = 20;
+				while (pool.length > 1) {
+					const next: Geom[] = [];
+					for (let p = 0; p < pool.length; p += MERGE_SIZE) {
+						const batch = pool.slice(p, p + MERGE_SIZE);
+						if (batch.length === 1) { next.push(batch[0]); continue; }
+						try {
+							next.push(union(batch[0], ...batch.slice(1)));
+						}
+						catch (_) {
+							// Fallback to pairwise for this batch
+							let acc = batch[0];
+							for (let k = 1; k < batch.length; k++) {
+								try { acc = union(acc, batch[k]); }
+								catch (__) { next.push(acc); acc = batch[k]; }
+							}
+							next.push(acc);
+						}
+					}
+					if (next.length >= pool.length) break;
+					pool = next;
+				}
+				for (const g of pool) {
+					for (const poly of g) {
+						if (poly.length > 0 && poly[0].length >= 4) merged.push(ringToPoints(poly[0]));
+					}
+				}
+			}
+			groupsDone++;
+			if (groupsDone % 10 === 0) {
+				onProgress?.(groupsDone, totalGroups);
+				await new Promise<void>(r => setTimeout(r, 0));
+			}
 		}
+
+		console.warn(TAG, `UnionHoles pass ${pass}: ${n} → ${merged.length} (${needUnion} groups, ${unionFailed} failed)`);
+
+		if (merged.length >= current.length) {
+			current = merged;
+			break;
+		}
+		// Early exit if reduction < 5%
+		const reduction = (n - merged.length) / n;
+		if (reduction < 0.05 && pass > 0) {
+			console.warn(TAG, `UnionHoles: reduction ${(reduction * 100).toFixed(1)}% < 5%, stopping`);
+			current = merged;
+			break;
+		}
+		current = merged;
 	}
 
-	return parseGeomResults(resultGeom);
-}
-
-function parseGeomResults(geom: Geom): { outer: Point[]; holes: Point[][] }[] {
-	const results: { outer: Point[]; holes: Point[][] }[] = [];
-	for (const poly of geom) {
-		if (poly.length === 0) continue;
-		const outerRing = poly[0];
-		if (outerRing.length < 4) continue;
-		const outer = ringToPoints(outerRing);
-		const innerHoles: Point[][] = [];
-		for (let i = 1; i < poly.length; i++) {
-			if (poly[i].length >= 4) innerHoles.push(ringToPoints(poly[i]));
-		}
-		results.push({ outer, holes: innerHoles });
-	}
-	return results;
+	return current;
 }

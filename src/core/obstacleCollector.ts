@@ -116,6 +116,7 @@ export interface ComponentObstacles {
 	silkscreenShapes: (number | string)[][];
 	designatorBox: (number | string)[] | null;
 	componentBBox: (number | string)[] | null;
+	rawBBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
 }
 
 /**
@@ -131,6 +132,7 @@ export async function getComponentObstacles(
 		silkscreenShapes: [],
 		designatorBox: null,
 		componentBBox: null,
+		rawBBox: null,
 	};
 
 	try {
@@ -163,6 +165,7 @@ export async function getComponentObstacles(
 			if (compId) {
 				const bbox = await eda.pcb_Primitive.getPrimitivesBBox([compId as any]);
 				if (bbox) {
+					obstacles.rawBBox = bbox;
 					const bboxCx = (bbox.minX + bbox.maxX) / 2;
 					const bboxCy = (bbox.minY + bbox.maxY) / 2;
 					const bboxW = bbox.maxX - bbox.minX;
@@ -505,7 +508,7 @@ export async function getViaPolygons(): Promise<(number | string)[][]> {
 				if (diameter <= 0)
 					continue;
 
-				const pts = createCirclePolygon(x, y, diameter / 2, 24);
+				const pts = createCirclePolygon(x, y, diameter / 2, 8);
 				if (pts.length >= 3) {
 					polygons.push(pointsToSourceArray(pts));
 				}
@@ -736,7 +739,7 @@ export async function getLinePolygons(layer: number): Promise<{ polygon: (number
 						const ccx = source[idx + 1] as number;
 						const ccy = source[idx + 2] as number;
 						const cr = source[idx + 3] as number;
-						const points = createCirclePolygon(ccx, ccy, cr + r, 24);
+						const points = createCirclePolygon(ccx, ccy, cr + r, 12);
 						if (points.length >= 3) {
 							result.push({ polygon: pointsToSourceArray(points), negateBisector: false });
 						}

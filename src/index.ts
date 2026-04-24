@@ -8,7 +8,7 @@
 import type { Point } from './utils/polygonUtils';
 import { createFillPrimitiveWithFix } from './core/booleanOperation';
 import { getAllComponents, getComponentObstacles, getComponentPadPolygons, getCutoutRegionPolygons, getLinePolygons, getRegionPolygons, getSilkscreenTextBoxesWithRotation, getStandalonePadPolygons, getTrackPolygons, getViaPolygons } from './core/obstacleCollector';
-import { clipObstaclesToRegionWithMeta, mergeOverlappingObstacles, subtractHolesFromRegionIncremental } from './core/polygonBoolean';
+import { clipObstaclesToRegionWithMeta, unionAllHoles } from './core/polygonBoolean';
 import { offsetObstacles } from './core/polygonOffset';
 import { LAYER_BOTTOM_COPPER, LAYER_BOTTOM_SILKSCREEN, LAYER_TOP_COPPER, LAYER_TOP_SILKSCREEN } from './utils/constants';
 import { aabbIntersects, calculateBoundingBox, ensureClockwise, ensureCounterClockwise, pointsToSourceArray, sourceArrayToPoints } from './utils/polygonUtils';
@@ -285,10 +285,10 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		// 布尔差运算：填充区域减去障碍物
-		let results: { outer: Point[]; holes: Point[][] }[] = [{ outer: fillPoints, holes: [] }];
+		let pipelineResult: { outers: Point[][]; holes: Point[][] } = { outers: [fillPoints], holes: [] };
 		if (obstaclePoints.length > 0) {
 			const fillRegionCW = ensureClockwise(fillPoints);
-			results = await processObstaclePipeline(
+			pipelineResult = await processObstaclePipeline(
 				fillRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
 			);
 		}
@@ -302,10 +302,10 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		// 创建新填充
 		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
 		let created = 0;
-		for (const result of results) {
+		for (const outer of pipelineResult.outers) {
 			try {
-				const outerSource = pointsToSourceArray(ensureClockwise(result.outer));
-				const holeSources = result.holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
+				const outerSource = pointsToSourceArray(ensureClockwise(outer));
+				const holeSources = pipelineResult.holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
 				const complexPolyArray = [outerSource, ...holeSources];
 				const fill = await createFillPrimitiveWithFix(fillLayer, complexPolyArray);
 				if (fill) created++;
@@ -455,14 +455,8 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 			allObstacles.push({ polygon: obstacles.componentBBox, rotation: 0, negateBisector: false });
 			compBBox++;
 		}
-		// 收集组件 bbox 用于过滤焊盘
-		const compId = components[ci].getState_PrimitiveId?.();
-		if (compId) {
-			try {
-				const bbox = await eda.pcb_Primitive.getPrimitivesBBox([compId as any]);
-				if (bbox) compBBoxes.push(bbox);
-			}
-			catch (_) {}
+		if (obstacles.rawBBox) {
+			compBBoxes.push(obstacles.rawBBox);
 		}
 	}
 	console.warn(TAG, `Components: ${components.length} comps, ${compDesignator} designators, ${compBBox} bboxes`);
@@ -628,23 +622,18 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			return true;
 		}
 
-		// 步骤 3-6：裁剪→外扩→AABB→布尔差集
+		// 步骤 3-5：裁剪→外扩→AABB→合并洞
 		const userRegionCW = ensureClockwise(userPoints);
-		const results = await processObstaclePipeline(
+		const { outers, holes } = await processObstaclePipeline(
 			userRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
 		);
 
-		if (results.length === 0) {
-			eda.sys_Message.showToastMessage('挖洞后区域为空', 'warning', 3);
-			return false;
-		}
-
 		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
 		let created = 0;
-		for (const result of results) {
+		for (const outer of outers) {
 			try {
-				const outerSource = pointsToSourceArray(ensureClockwise(result.outer));
-				const holeSources = result.holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
+				const outerSource = pointsToSourceArray(ensureClockwise(outer));
+				const holeSources = holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
 				const complexPolyArray = [outerSource, ...holeSources];
 				const fill = await createFillPrimitiveWithFix(targetLayer, complexPolyArray);
 				if (fill) { created++; fillCount++; }
@@ -673,6 +662,7 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 	}
 }
 
+
 async function processObstaclePipeline(
 	regionCW: Point[],
 	obstaclePoints: Point[][],
@@ -680,7 +670,7 @@ async function processObstaclePipeline(
 	obstacleNegateBisector: boolean[],
 	obstacleExtraGaps: number[],
 	gap: number,
-): Promise<{ outer: Point[]; holes: Point[][] }[]> {
+): Promise<{ outers: Point[][]; holes: Point[][] }> {
 	const t0 = Date.now();
 
 	const metadata = obstaclePoints.map((_, i) => ({
@@ -688,19 +678,20 @@ async function processObstaclePipeline(
 		negateBisector: obstacleNegateBisector[i],
 		extraGap: obstacleExtraGaps[i],
 	}));
-	const clippedWithMeta = await clipObstaclesToRegionWithMeta(
-		obstaclePoints, metadata, regionCW,
-		(done, total) => eda.sys_Message.showToastMessage(`正在裁剪障碍物... (${done}/${total})`, "info", 3),
-	);
+
+	// Step 1: Offset first (expand obstacles by gap)
+	const offsetPoints = offsetObstacles(metadata.map((m, i) => ({
+		points: obstaclePoints[i],
+		rotation: m.rotation,
+		negateBisector: m.negateBisector,
+		extraGap: m.extraGap,
+	})));
 	const t1 = Date.now();
-	console.warn(TAG, `[perf] Clip: ${obstaclePoints.length} → ${clippedWithMeta.length} in ${((t1 - t0) / 1000).toFixed(1)}s`);
+	console.warn(TAG, `[perf] Offset: ${obstaclePoints.length} obstacles in ${((t1 - t0) / 1000).toFixed(1)}s`);
 
-	const offsetPoints = offsetObstacles(clippedWithMeta);
-	const t2 = Date.now();
-	console.warn(TAG, `[perf] Offset: ${clippedWithMeta.length} obstacles in ${((t2 - t1) / 1000).toFixed(1)}s`);
-
+	// Step 2: AABB pre-filter
 	const regionBB = calculateBoundingBox(regionCW);
-	const maxExtraGap = Math.max(...clippedWithMeta.map(m => m.extraGap), gap);
+	const maxExtraGap = Math.max(...metadata.map(m => m.extraGap), gap);
 	const regionBBExpanded = {
 		minX: regionBB.minX - maxExtraGap,
 		minY: regionBB.minY - maxExtraGap,
@@ -708,21 +699,30 @@ async function processObstaclePipeline(
 		maxY: regionBB.maxY + maxExtraGap,
 	};
 	const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
-	const t3 = Date.now();
-	console.warn(TAG, `[perf] AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} in ${((t3 - t2) / 1000).toFixed(1)}s`);
+	const t2 = Date.now();
+	console.warn(TAG, `[perf] AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} in ${((t2 - t1) / 1000).toFixed(1)}s`);
 
-	// Boolean difference
-	eda.sys_Message.showToastMessage("正在布尔运算...", "info", 3);
-	const results = await subtractHolesFromRegionIncremental(
-		regionCW, aabbFiltered,
-		(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, "info", 3),
+	// Step 3: Clip expanded holes to region
+	const dummyMeta = aabbFiltered.map(() => ({ rotation: 0, negateBisector: false, extraGap: 0 }));
+	const clipped = await clipObstaclesToRegionWithMeta(
+		aabbFiltered, dummyMeta, regionCW,
+		(done, total) => eda.sys_Message.showToastMessage(`正在裁剪障碍物... (${done}/${total})`, "info", 3),
+	);
+	const clippedHoles = clipped.map(c => c.points);
+	const t3 = Date.now();
+	console.warn(TAG, `[perf] Clip: ${aabbFiltered.length} → ${clippedHoles.length} in ${((t3 - t2) / 1000).toFixed(1)}s`);
+
+	// Step 4: Union overlapping holes
+	eda.sys_Message.showToastMessage("正在合并洞...", "info", 3);
+	const mergedHoles = await unionAllHoles(clippedHoles,
+		(done, total) => eda.sys_Message.showToastMessage(`正在合并洞... (${done}/${total})`, "info", 3),
 	);
 	const t4 = Date.now();
-	console.warn(TAG, `[perf] Boolean diff: ${aabbFiltered.length} holes → ${results.length} polys in ${((t4 - t3) / 1000).toFixed(1)}s`);
+	console.warn(TAG, `[perf] Union holes: ${clippedHoles.length} → ${mergedHoles.length} in ${((t4 - t3) / 1000).toFixed(1)}s`);
 	console.warn(TAG, `[perf] Pipeline total: ${((t4 - t0) / 1000).toFixed(1)}s`);
-	_g.__df_perf = { clip: t1 - t0, offset: t2 - t1, aabb: t3 - t2, boolDiff: t4 - t3, total: t4 - t0, obstaclesIn: obstaclePoints.length, clipped: clippedWithMeta.length, holes: aabbFiltered.length, results: results.length };
+	_g.__df_perf = { offset: t1 - t0, aabb: t2 - t1, clip: t3 - t2, union: t4 - t3, total: t4 - t0, obstaclesIn: obstaclePoints.length, afterAabb: aabbFiltered.length, afterClip: clippedHoles.length, holesOut: mergedHoles.length };
 
-	return results;
+	return { outers: [regionCW], holes: mergedHoles };
 }
 /**
  * 自动检测目标丝印层

@@ -2,8 +2,8 @@
 	"name": "dynamic-fill-silkscreen-region",
 	"uuid": "94d632e61f0c4ca38e7dea890adc7f9c",
 	"displayName": "动态丝印填充",
-	"description": "根据板框、器件丝印、位号和焊盘自动生成丝印填充区域",
-	"version": "1.2.0",
+	"description": "根据板框、器件丝印、位号和焊盘等自动避让生成丝印填充区域",
+	"version": "1.3.0",
 	"publisher": "EasyEDA",
 	"engines": {
 		"eda": "^3.0.0"

@@ -293,36 +293,64 @@ export function sourceArrayToPoints(sourceArray: (number | string)[]): Point[] {
 				}
 			}
 			else if (item === 'R') {
-				// R x y width height rotation cornerRadius
-				// (x, y) is the top-left corner of the unrotated rectangle
+				// R x y width height [rotation] [isCCW] [round]
 				if (i + 4 < sourceArray.length) {
 					const rx = sourceArray[i + 1] as number;
 					const ry = sourceArray[i + 2] as number;
 					const rw = sourceArray[i + 3] as number;
 					const rh = sourceArray[i + 4] as number;
 					i += 5;
-					// Parse optional rotation and cornerRadius
 					let rotation = 0;
+					let round = 0;
+					const extras: number[] = [];
 					while (i < sourceArray.length && typeof sourceArray[i] === 'number') {
-						if (rotation === 0)
-							rotation = sourceArray[i] as number;
+						extras.push(sourceArray[i] as number);
 						i++;
 					}
-					// (rx, ry) is the start point, height goes upward (Y decreases), rotation around (rx, ry)
+					if (extras.length >= 1) rotation = extras[0];
+					if (extras.length >= 3) round = extras[2];
+
 					const rad = (rotation * Math.PI) / 180;
 					const cos = Math.cos(rad);
 					const sin = Math.sin(rad);
-					const corners = [
-						{ x: 0, y: 0 },
-						{ x: rw, y: 0 },
-						{ x: rw, y: -rh },
-						{ x: 0, y: -rh },
-					];
-					for (const c of corners) {
-						points.push({
-							x: rx + c.x * cos - c.y * sin,
-							y: ry + c.x * sin + c.y * cos,
-						});
+
+					if (round > 0 && round < Math.min(rw, rh) / 2) {
+						const r = round;
+						const innerCorners = [
+							{ cx: r, cy: -r },
+							{ cx: rw - r, cy: -r },
+							{ cx: rw - r, cy: -(rh - r) },
+							{ cx: r, cy: -(rh - r) },
+						];
+						const startAngles = [Math.PI / 2, 0, -Math.PI / 2, Math.PI];
+						const arcSegs = 6;
+						for (let ci = 0; ci < 4; ci++) {
+							const ic = innerCorners[ci];
+							const sa = startAngles[ci];
+							for (let s = 0; s <= arcSegs; s++) {
+								const a = sa + (s / arcSegs) * (-Math.PI / 2);
+								const lx = ic.cx + r * Math.cos(a);
+								const ly = ic.cy + r * Math.sin(a);
+								points.push({
+									x: rx + lx * cos - ly * sin,
+									y: ry + lx * sin + ly * cos,
+								});
+							}
+						}
+					}
+					else {
+						const corners = [
+							{ x: 0, y: 0 },
+							{ x: rw, y: 0 },
+							{ x: rw, y: -rh },
+							{ x: 0, y: -rh },
+						];
+						for (const c of corners) {
+							points.push({
+								x: rx + c.x * cos - c.y * sin,
+								y: ry + c.x * sin + c.y * cos,
+							});
+						}
 					}
 				}
 				else {

@@ -183,6 +183,7 @@ async function pollCommands(): Promise<void> {
  * 步骤3: 检测是否是顶层或底层丝印层
  */
 async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<boolean> {
+	const startTime = Date.now();
 	try {
 		// 步骤1: 获取选中的图元列表
 		let selectedPrimitives: any[] = [];
@@ -260,7 +261,10 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		eda.sys_Message.showToastMessage('正在处理填充避让...', 'info', 3);
 
 		// 收集障碍物（使用选中填充的层）
+		const tc0 = Date.now();
 		const allObstacles = await collectAllObstacles(fillLayer, options, gap);
+		const tc1 = Date.now();
+		console.warn(TAG, `[perf] Collect obstacles: ${allObstacles.length} in ${tc1 - tc0}ms`);
 
 		// 转换为 Point[]
 		const obstaclePoints: Point[][] = [];
@@ -281,11 +285,8 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		// 布尔差运算：填充区域减去障碍物
-		let results: { outer: Point[]; holes: Point[][] }[] = [];
-		if (obstaclePoints.length === 0) {
-			results = [{ outer: fillPoints, holes: [] }];
-		}
-		else {
+		let results: { outer: Point[]; holes: Point[][] }[] = [{ outer: fillPoints, holes: [] }];
+		if (obstaclePoints.length > 0) {
 			const fillRegionCW = ensureClockwise(fillPoints);
 			results = await processObstaclePipeline(
 				fillRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
@@ -299,17 +300,15 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		// 创建新填充
+		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
 		let created = 0;
 		for (const result of results) {
 			try {
 				const outerSource = pointsToSourceArray(ensureClockwise(result.outer));
 				const holeSources = result.holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
 				const complexPolyArray = [outerSource, ...holeSources];
-
 				const fill = await createFillPrimitiveWithFix(fillLayer, complexPolyArray);
-				if (fill) {
-					created++;
-				}
+				if (fill) created++;
 			}
 			catch (e) {
 				console.warn(TAG, 'handleFillAvoid: Failed to create fill:', e);
@@ -317,7 +316,9 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		console.warn(TAG, 'handleFillAvoid: Created', created, 'fill(s)');
-		eda.sys_Message.showToastMessage('填充避让完成', 'info', 3);
+		const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+		console.warn(TAG, `[perf] 填充避让总耗时: ${totalTime}s`);
+		eda.sys_Message.showToastMessage(`填充避让完成，耗时 ${totalTime}s`, 'info', 5);
 		return created > 0;
 	}
 	catch (e) {
@@ -440,6 +441,9 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 			}),
 		),
 	);
+
+	// 收集组件 bbox 用于过滤封装内焊盘
+	const compBBoxes: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
 	let compDesignator = 0; let compBBox = 0;
 	for (let ci = 0; ci < components.length; ci++) {
 		const obstacles = componentObstacleResults[ci];
@@ -450,6 +454,15 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 		if (options.componentBBox && obstacles.componentBBox) {
 			allObstacles.push({ polygon: obstacles.componentBBox, rotation: 0, negateBisector: false });
 			compBBox++;
+		}
+		// 收集组件 bbox 用于过滤焊盘
+		const compId = components[ci].getState_PrimitiveId?.();
+		if (compId) {
+			try {
+				const bbox = await eda.pcb_Primitive.getPrimitivesBBox([compId as any]);
+				if (bbox) compBBoxes.push(bbox);
+			}
+			catch (_) {}
 		}
 	}
 	console.warn(TAG, `Components: ${components.length} comps, ${compDesignator} designators, ${compBBox} bboxes`);
@@ -462,15 +475,48 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 		console.warn(TAG, `Component pads (instead of bbox): ${componentPads.length}`);
 	}
 
+	// 过滤封装内焊盘，只保留真正的游离焊盘
+	let padFiltered = 0;
 	for (const pad of standalonePads) {
+		const pts = sourceArrayToPoints(pad.polygon);
+		if (pts.length === 0) continue;
+		const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+		const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+		let insideComp = false;
+		for (const bb of compBBoxes) {
+			if (cx >= bb.minX && cx <= bb.maxX && cy >= bb.minY && cy <= bb.maxY) {
+				insideComp = true;
+				break;
+			}
+		}
+		if (insideComp && options.componentBBox) {
+			padFiltered++;
+			continue;
+		}
 		allObstacles.push({ polygon: pad.polygon, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Standalone pads: ${standalonePads.length}`);
+	console.warn(TAG, `Standalone pads: ${standalonePads.length}, filtered ${padFiltered} inside components`);
 
+	// 过滤封装内过孔
+	let viaFiltered = 0;
 	for (const via of vias) {
+		const pts = sourceArrayToPoints(via);
+		if (pts.length === 0) { allObstacles.push({ polygon: via, rotation: 0, negateBisector: false }); continue; }
+		const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+		const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+		let insideComp = false;
+		if (options.componentBBox) {
+			for (const bb of compBBoxes) {
+				if (cx >= bb.minX && cx <= bb.maxX && cy >= bb.minY && cy <= bb.maxY) {
+					insideComp = true;
+					break;
+				}
+			}
+		}
+		if (insideComp) { viaFiltered++; continue; }
 		allObstacles.push({ polygon: via, rotation: 0, negateBisector: false });
 	}
-	console.warn(TAG, `Vias: ${vias.length}`);
+	console.warn(TAG, `Vias: ${vias.length}, filtered ${viaFiltered} inside components`);
 
 	for (const t of copperTexts) {
 		allObstacles.push({ polygon: t.polygon, rotation: t.rotation, negateBisector: false, extraGap: 0 });
@@ -532,6 +578,7 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
  * 6. 用户绘制填充区域与挖洞区域布尔差集
  */
 async function processPolygonFill(userPoints: Point[], gap: number): Promise<boolean> {
+	const startTime = Date.now();
 	if (userPoints.length < 3) {
 		eda.sys_Message.showToastMessage('错误: 至少需要3个点', 'error', 3);
 		return false;
@@ -581,7 +628,7 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			return true;
 		}
 
-		// 步骤 3-6：裁剪→外扩→AABB过滤→合并→布尔差集
+		// 步骤 3-6：裁剪→外扩→AABB→布尔差集
 		const userRegionCW = ensureClockwise(userPoints);
 		const results = await processObstaclePipeline(
 			userRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
@@ -592,21 +639,15 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			return false;
 		}
 
-		// 将每个结果多边形转为 complex polygon 格式并创建填充
 		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
 		let created = 0;
-
 		for (const result of results) {
 			try {
 				const outerSource = pointsToSourceArray(ensureClockwise(result.outer));
 				const holeSources = result.holes.map(h => pointsToSourceArray(ensureCounterClockwise(h)));
 				const complexPolyArray = [outerSource, ...holeSources];
-
 				const fill = await createFillPrimitiveWithFix(targetLayer, complexPolyArray);
-				if (fill) {
-					created++;
-					fillCount++;
-				}
+				if (fill) { created++; fillCount++; }
 			}
 			catch (e) {
 				console.warn(TAG, 'Failed to create fill for sub-polygon:', e);
@@ -619,7 +660,9 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 		}
 
 		console.warn(TAG, `Created ${created} fill(s), total: ${fillCount}`);
-		eda.sys_Message.showToastMessage('填充完成', 'info', 3);
+		const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+		console.warn(TAG, `[perf] 填充总耗时: ${totalTime}s`);
+		eda.sys_Message.showToastMessage(`填充完成，耗时 ${totalTime}s`, 'info', 5);
 		sendStatus('done', { count: fillCount });
 		return true;
 	}
@@ -638,7 +681,8 @@ async function processObstaclePipeline(
 	obstacleExtraGaps: number[],
 	gap: number,
 ): Promise<{ outer: Point[]; holes: Point[][] }[]> {
-	// 裁剪到区域内（AABB预筛 + region转换只做一次 + 异步让出）
+	const t0 = Date.now();
+
 	const metadata = obstaclePoints.map((_, i) => ({
 		rotation: obstacleRotations[i],
 		negateBisector: obstacleNegateBisector[i],
@@ -646,14 +690,15 @@ async function processObstaclePipeline(
 	}));
 	const clippedWithMeta = await clipObstaclesToRegionWithMeta(
 		obstaclePoints, metadata, regionCW,
-		(done, total) => eda.sys_Message.showToastMessage(`正在裁剪障碍物... (${done}/${total})`, 'info', 3),
+		(done, total) => eda.sys_Message.showToastMessage(`正在裁剪障碍物... (${done}/${total})`, "info", 3),
 	);
-	console.warn(TAG, `Clip to region: ${obstaclePoints.length} → ${clippedWithMeta.length} obstacles`);
+	const t1 = Date.now();
+	console.warn(TAG, `[perf] Clip: ${obstaclePoints.length} → ${clippedWithMeta.length} in ${((t1 - t0) / 1000).toFixed(1)}s`);
 
-	// 外扩
 	const offsetPoints = offsetObstacles(clippedWithMeta);
+	const t2 = Date.now();
+	console.warn(TAG, `[perf] Offset: ${clippedWithMeta.length} obstacles in ${((t2 - t1) / 1000).toFixed(1)}s`);
 
-	// AABB 预过滤
 	const regionBB = calculateBoundingBox(regionCW);
 	const maxExtraGap = Math.max(...clippedWithMeta.map(m => m.extraGap), gap);
 	const regionBBExpanded = {
@@ -663,22 +708,22 @@ async function processObstaclePipeline(
 		maxY: regionBB.maxY + maxExtraGap,
 	};
 	const aabbFiltered = offsetPoints.filter(pts => aabbIntersects(calculateBoundingBox(pts), regionBBExpanded));
-	console.warn(TAG, `AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} holes`);
+	const t3 = Date.now();
+	console.warn(TAG, `[perf] AABB filter: ${offsetPoints.length} → ${aabbFiltered.length} in ${((t3 - t2) / 1000).toFixed(1)}s`);
 
-	// 合并重叠洞
-	const mergedHoles = mergeOverlappingObstacles(aabbFiltered);
-	console.warn(TAG, `Merge: ${aabbFiltered.length} → ${mergedHoles.length} holes`);
-
-	// 布尔差集
-	eda.sys_Message.showToastMessage('正在构建多边形...', 'info', 3);
+	// Boolean difference
+	eda.sys_Message.showToastMessage("正在布尔运算...", "info", 3);
 	const results = await subtractHolesFromRegionIncremental(
-		regionCW, mergedHoles,
-		(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, 'info', 3),
+		regionCW, aabbFiltered,
+		(done, total) => eda.sys_Message.showToastMessage(`正在布尔运算... (${done}/${total})`, "info", 3),
 	);
-	console.warn(TAG, `Difference result: ${results.length} polygon(s)`);
+	const t4 = Date.now();
+	console.warn(TAG, `[perf] Boolean diff: ${aabbFiltered.length} holes → ${results.length} polys in ${((t4 - t3) / 1000).toFixed(1)}s`);
+	console.warn(TAG, `[perf] Pipeline total: ${((t4 - t0) / 1000).toFixed(1)}s`);
+	_g.__df_perf = { clip: t1 - t0, offset: t2 - t1, aabb: t3 - t2, boolDiff: t4 - t3, total: t4 - t0, obstaclesIn: obstaclePoints.length, clipped: clippedWithMeta.length, holes: aabbFiltered.length, results: results.length };
+
 	return results;
 }
-
 /**
  * 自动检测目标丝印层
  * 规则：

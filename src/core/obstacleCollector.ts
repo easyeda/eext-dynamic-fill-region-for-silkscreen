@@ -622,117 +622,74 @@ export async function getSilkscreenTextBoxesWithRotation(targetLayer: number, ga
 	const result: { polygon: (number | string)[]; rotation: number }[] = [];
 	const LNAME = (l: number) => l === 1 ? 'TOP_COPPER' : l === 2 ? 'BOTTOM_COPPER' : l === 3 ? 'TOP_SILK' : l === 4 ? 'BOTTOM_SILK' : String(l);
 	try {
-		// Try to get all strings first, then filter by layer
 		let strings: any[];
 		try {
 			strings = await eda.pcb_PrimitiveString.getAll();
-		}
-		catch (e) {
-			// Fallback: try with layer argument
-			try {
-				strings = await eda.pcb_PrimitiveString.getAll(targetLayer as any);
-			}
-			catch (e2) {
-				console.warn(TAG, `getAll() failed both ways: ${String(e)}, ${String(e2)}`);
-				return result;
-			}
+		} catch (e) {
+			try { strings = await eda.pcb_PrimitiveString.getAll(targetLayer as any); }
+			catch (e2) { return result; }
 		}
 
-		if (!strings || !Array.isArray(strings) || strings.length === 0) {
-			console.warn(TAG, `No string primitives on layer ${LNAME(targetLayer)}, strings type: ${typeof strings}, isArray: ${Array.isArray(strings)}`);
-			return result;
+		if (!strings || !Array.isArray(strings) || strings.length === 0) return result;
+
+		const filtered = strings.filter((s: any) => s.getState_Layer?.() === targetLayer);
+		console.warn(TAG, );
+
+		// Collect metadata and batch getPrimitivesBBox
+		const textMeta: { primId: string; rotation: number }[] = [];
+		for (const primString of filtered) {
+			const text = primString.getState_Text?.() ?? '';
+			if (!text) continue;
+			const primId = primString.getState_PrimitiveId?.();
+			if (!primId) continue;
+			const rotation = primString.getState_Rotation?.() ?? 0;
+			textMeta.push({ primId, rotation });
 		}
 
-		// Filter by layer
-		const filtered = strings.filter((s: any) => {
-			const l = s.getState_Layer?.();
-			return l === targetLayer;
-		});
-		console.warn(TAG, `Found ${strings.length} total strings, ${filtered.length} on layer ${LNAME(targetLayer)}`);
+		// Fetch all bboxes in parallel
+		const bboxes = await Promise.all(
+			textMeta.map(m => eda.pcb_Primitive.getPrimitivesBBox([m.primId as any]).catch(() => null))
+		);
 
-		console.warn(TAG, `Found ${filtered.length} string primitives on layer ${LNAME(targetLayer)}`);
+		for (let i = 0; i < textMeta.length; i++) {
+			const bbox = bboxes[i];
+			if (!bbox) continue;
+			const { rotation } = textMeta[i];
+			const bboxCx = (bbox.minX + bbox.maxX) / 2;
+			const bboxCy = (bbox.minY + bbox.maxY) / 2;
+			const bboxW = bbox.maxX - bbox.minX;
+			const bboxH = bbox.maxY - bbox.minY;
+			if (bboxW <= 0 || bboxH <= 0) continue;
 
-		for (let i = 0; i < filtered.length; i++) {
-			const primString = filtered[i];
-			try {
-				const text = primString.getState_Text?.() ?? '';
-				if (!text || text.length === 0)
-					continue;
-
-				const primId = primString.getState_PrimitiveId?.();
-				if (!primId)
-					continue;
-
-				const rotation = primString.getState_Rotation?.() ?? 0;
-
-				// Use actual BBox from EDA (axis-aligned bounding box of the rotated text)
-				const bbox = await eda.pcb_Primitive.getPrimitivesBBox([primId as any]);
-				if (!bbox)
-					continue;
-
-				const bboxCx = (bbox.minX + bbox.maxX) / 2;
-				const bboxCy = (bbox.minY + bbox.maxY) / 2;
-				const bboxW = bbox.maxX - bbox.minX;
-				const bboxH = bbox.maxY - bbox.minY;
-				if (bboxW <= 0 || bboxH <= 0)
-					continue;
-
-				// getPrimitivesBBox returns AABB of the already-rotated text.
-				// Reverse-compute original unrotated dimensions, expand by gap, then re-rotate.
-				let points: Point[];
-				if (Math.abs(rotation) < 0.01) {
-					const expandedW = bboxW + 2 * gap;
-					const expandedH = bboxH + 2 * gap;
-					points = createRectanglePolygon(bboxCx, bboxCy, expandedW, expandedH, 0);
-				}
-				else {
-					const rad = rotation * Math.PI / 180;
-					const cosR = Math.abs(Math.cos(rad));
-					const sinR = Math.abs(Math.sin(rad));
-					const denom = cosR * cosR - sinR * sinR;
-					let origW: number, origH: number;
-					if (Math.abs(denom) < 0.01) {
-						const size = Math.max(bboxW, bboxH) / (cosR + sinR);
-						origW = size;
-						origH = size;
+			let points: Point[];
+			if (Math.abs(rotation) < 0.01) {
+				points = createRectanglePolygon(bboxCx, bboxCy, bboxW + 2 * gap, bboxH + 2 * gap, 0);
+			} else {
+				const rad = rotation * Math.PI / 180;
+				const cosR = Math.abs(Math.cos(rad));
+				const sinR = Math.abs(Math.sin(rad));
+				const denom = cosR * cosR - sinR * sinR;
+				let origW: number, origH: number;
+				if (Math.abs(denom) < 0.01) {
+					const size = Math.max(bboxW, bboxH) / (cosR + sinR);
+					origW = size; origH = size;
+				} else {
+					origW = (bboxW * cosR - bboxH * sinR) / denom;
+					origH = (bboxH * cosR - bboxW * sinR) / denom;
+					if (origW <= 0 || origH <= 0) {
+						points = createRectanglePolygon(bboxCx, bboxCy, bboxW + 2 * gap, bboxH + 2 * gap, 0);
+						if (points.length >= 3) result.push({ polygon: pointsToSourceArray(points), rotation: 0 });
+						continue;
 					}
-					else {
-						origW = (bboxW * cosR - bboxH * sinR) / denom;
-						origH = (bboxH * cosR - bboxW * sinR) / denom;
-						if (origW <= 0 || origH <= 0) {
-							origW = bboxW;
-							origH = bboxH;
-							points = createRectanglePolygon(bboxCx, bboxCy, origW + 2 * gap, origH + 2 * gap, 0);
-							if (points.length >= 3) {
-								const src = pointsToSourceArray(points);
-								result.push({ polygon: src, rotation: 0 });
-							}
-							continue;
-						}
-					}
-					points = createRectanglePolygon(bboxCx, bboxCy, origW + 2 * gap, origH + 2 * gap, rotation);
 				}
-
-				if (points.length >= 3) {
-					const src = pointsToSourceArray(points);
-					const minX = Math.min(...points.map(p => p.x));
-					const maxX = Math.max(...points.map(p => p.x));
-					const minY = Math.min(...points.map(p => p.y));
-					const maxY = Math.max(...points.map(p => p.y));
-					console.warn(TAG, `  Text "${text}" rot=${rotation}° origBbox=${bboxW.toFixed(0)}x${bboxH.toFixed(0)} polyAABB=${(maxX - minX).toFixed(0)}x${(maxY - minY).toFixed(0)} center=(${bboxCx.toFixed(0)},${bboxCy.toFixed(0)})`);
-					result.push({ polygon: src, rotation: 0 });
-				}
+				points = createRectanglePolygon(bboxCx, bboxCy, origW + 2 * gap, origH + 2 * gap, rotation);
 			}
-			catch (e) {
-				console.warn(TAG, 'Failed to process string primitive:', e);
-			}
+			if (points.length >= 3) result.push({ polygon: pointsToSourceArray(points), rotation: 0 });
 		}
 
-		console.warn(TAG, `Processed ${result.length} text boxes with rotation on layer ${LNAME(targetLayer)}`);
-	}
-	catch (e) {
-		const err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-		console.warn(TAG, `Failed to get text on layer ${targetLayer}: ${err}, stack: ${e instanceof Error ? e.stack : ''}`);
+		console.warn(TAG, );
+	} catch (e) {
+		console.warn(TAG, 'Failed to get text:', e);
 	}
 	return result;
 }

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hans">
 <head>
-  <title>动态丝印填充</title>
+  <title id="pageTitle"></title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
@@ -81,38 +81,63 @@
 </head>
 <body>
   <div class="row">
-    <label>间隙:</label>
+    <label id="lblGap"></label>
     <input type="number" id="gap" value="10" min="0" max="1000" />
     <span>mil</span>
   </div>
   <div class="row">
-    <label>层:</label>
-    <label><input type="radio" name="layer" id="layerTop" value="3" checked /> 顶层丝印</label>
-    <label><input type="radio" name="layer" id="layerBottom" value="4" /> 底层丝印</label>
+    <label id="lblLayer"></label>
+    <label><input type="radio" name="layer" id="layerTop" value="3" checked /> <span id="lblTopSilk"></span></label>
+    <label><input type="radio" name="layer" id="layerBottom" value="4" /> <span id="lblBottomSilk"></span></label>
   </div>
   <div class="options">
-    <div class="options-title">避让对象:</div>
+    <div class="options-title" id="optTitle"></div>
     <div class="options-grid">
-      <label class="opt-item"><input type="checkbox" id="optSelectAll" /> 全选</label>
-      <label class="opt-item"><input type="checkbox" id="optComponentBBox" checked /> 封装</label>
-      <label class="opt-item"><input type="checkbox" id="optVias" checked /> 过孔</label>
-      <label class="opt-item"><input type="checkbox" id="optPads" checked /> 游离焊盘</label>
-      <label class="opt-item"><input type="checkbox" id="optCutouts" checked /> 挖槽区域</label>
-      <label class="opt-item"><input type="checkbox" id="optTextSilk" checked /> 丝印层文本</label>
-      <label class="opt-item"><input type="checkbox" id="optLinesSilk" checked /> 丝印层线条</label>
-      <label class="opt-item"><input type="checkbox" id="optTextCopper" /> 铜层文本</label>
-      <label class="opt-item"><input type="checkbox" id="optLinesCopper" /> 铜层线条</label>
-      <label class="opt-item"><input type="checkbox" id="optTracksCopper" /> 铜层导线</label>
+      <label class="opt-item"><input type="checkbox" id="optSelectAll" /> <span id="lblSelectAll"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optComponentBBox" checked /> <span id="lblFootprint"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optVias" checked /> <span id="lblVias"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optPads" checked /> <span id="lblFloatingPads"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optCutouts" checked /> <span id="lblCutouts"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optTextSilk" checked /> <span id="lblSilkText"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optLinesSilk" checked /> <span id="lblSilkLines"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optTextCopper" /> <span id="lblCopperText"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optLinesCopper" /> <span id="lblCopperLines"></span></label>
+      <label class="opt-item"><input type="checkbox" id="optTracksCopper" /> <span id="lblCopperTracks"></span></label>
     </div>
   </div>
   <div class="row">
-    <button id="btnToggle" class="btn">开始绘制</button>
+    <button id="btnToggle" class="btn"></button>
   </div>
   <div class="row">
-    <button id="btnFillAvoid" class="btn btn-fill-avoid">选丝印填充避让</button>
+    <button id="btnFillAvoid" class="btn btn-fill-avoid"></button>
   </div>
 
   <script>
+    var edaObj = (typeof eda !== 'undefined') ? eda : (window.parent && window.parent.eda);
+    function t(tag, ...args) {
+      if (edaObj && edaObj.sys_I18n) return edaObj.sys_I18n.text(tag, undefined, undefined, ...args);
+      return tag;
+    }
+
+    document.getElementById('pageTitle').textContent = t('Dynamic Silkscreen Fill');
+    document.getElementById('lblGap').textContent = t('Gap:');
+    document.getElementById('lblLayer').textContent = t('Layer:');
+    document.getElementById('lblTopSilk').textContent = t('Top Silkscreen');
+    document.getElementById('lblBottomSilk').textContent = t('Bottom Silkscreen');
+    document.getElementById('optTitle').textContent = t('Avoidance Objects:');
+    document.getElementById('lblSelectAll').textContent = t('Select All');
+    document.getElementById('lblFootprint').textContent = t('Footprint');
+    document.getElementById('lblVias').textContent = t('Vias');
+    document.getElementById('lblFloatingPads').textContent = t('Floating Pads');
+    document.getElementById('lblCutouts').textContent = t('Cutout Areas');
+    document.getElementById('lblSilkText').textContent = t('Silkscreen Text');
+    document.getElementById('lblSilkLines').textContent = t('Silkscreen Lines');
+    document.getElementById('lblCopperText').textContent = t('Copper Text');
+    document.getElementById('lblCopperLines').textContent = t('Copper Lines');
+    document.getElementById('lblCopperTracks').textContent = t('Copper Tracks');
+    document.getElementById('btnToggle').textContent = t('Start Drawing');
+    document.getElementById('btnFillAvoid').textContent = t('Select Fill Avoidance');
+
     var drawing = false;
     var btn = document.getElementById('btnToggle');
     var gapInput = document.getElementById('gap');
@@ -164,7 +189,7 @@
         }
       };
       drawing = true;
-      btn.textContent = '完成绘制';
+      btn.textContent = t('Finish Drawing');
       btn.className = 'btn finish';
       gapInput.disabled = true;
       layerTop.disabled = true;
@@ -210,7 +235,7 @@
 
     function resetDrawingState() {
       drawing = false;
-      btn.textContent = '开始绘制';
+      btn.textContent = t('Start Drawing');
       btn.className = 'btn';
       gapInput.disabled = false;
       layerTop.disabled = false;

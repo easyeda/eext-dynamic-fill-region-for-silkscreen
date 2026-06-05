@@ -1,3 +1,12 @@
 {
-	"About...": "About..."
+	"About...": "About...",
+	"动态丝印填充": "Dynamic Silkscreen Fill",
+	"根据板框、器件丝印、位号和焊盘等自动避让生成丝印填充区域": "Auto-generate silkscreen fill regions with automatic avoidance of board outline, component silkscreen, designators, and pads",
+	"绘制动态填充...": "Draw Dynamic Fill...",
+	"PCB": "PCB",
+	"Silkscreen": "Silkscreen",
+	"Fill": "Fill",
+	"Dynamic": "Dynamic",
+	"丝印": "Silkscreen",
+	"填充": "Fill"
 }

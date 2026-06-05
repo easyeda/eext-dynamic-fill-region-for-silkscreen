@@ -1,4 +1,23 @@
 {
 	"About": "About",
-	"EasyEDA extension SDK v": "EasyEDA extension SDK v${1}"
+	"EasyEDA extension SDK v": "EasyEDA extension SDK v${1}",
+	"Dynamic Silkscreen Fill": "Dynamic Silkscreen Fill",
+	"Gap:": "Gap:",
+	"Layer:": "Layer:",
+	"Top Silkscreen": "Top Silkscreen",
+	"Bottom Silkscreen": "Bottom Silkscreen",
+	"Avoidance Objects:": "Avoidance Objects:",
+	"Select All": "Select All",
+	"Footprint": "Footprint",
+	"Vias": "Vias",
+	"Floating Pads": "Floating Pads",
+	"Cutout Areas": "Cutout Areas",
+	"Silkscreen Text": "Silkscreen Text",
+	"Silkscreen Lines": "Silkscreen Lines",
+	"Copper Text": "Copper Text",
+	"Copper Lines": "Copper Lines",
+	"Copper Tracks": "Copper Tracks",
+	"Start Drawing": "Start Drawing",
+	"Finish Drawing": "Finish Drawing",
+	"Select Fill Avoidance": "Select Fill Avoidance"
 }

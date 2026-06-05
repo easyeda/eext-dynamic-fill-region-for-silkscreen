@@ -1,4 +1,23 @@
 {
 	"About": "关于",
-	"EasyEDA extension SDK v": "嘉立创EDA 扩展 SDK v${1}"
+	"EasyEDA extension SDK v": "嘉立创EDA 扩展 SDK v${1}",
+	"Dynamic Silkscreen Fill": "动态丝印填充",
+	"Gap:": "间隙:",
+	"Layer:": "层:",
+	"Top Silkscreen": "顶层丝印",
+	"Bottom Silkscreen": "底层丝印",
+	"Avoidance Objects:": "避让对象:",
+	"Select All": "全选",
+	"Footprint": "封装",
+	"Vias": "过孔",
+	"Floating Pads": "游离焊盘",
+	"Cutout Areas": "挖槽区域",
+	"Silkscreen Text": "丝印层文本",
+	"Silkscreen Lines": "丝印层线条",
+	"Copper Text": "铜层文本",
+	"Copper Lines": "铜层线条",
+	"Copper Tracks": "铜层导线",
+	"Start Drawing": "开始绘制",
+	"Finish Drawing": "完成绘制",
+	"Select Fill Avoidance": "选丝印填充避让"
 }

@@ -112,7 +112,7 @@ async function pollCommands(): Promise<void> {
 			delete _g.__df_cmd;
 
 			if (cmd.type === 'start') {
-				eda.sys_Message.showToastMessage('请左键点击3个及以上轮廓点', 'info', 3);
+				eda.sys_Message.showToastMessage(eda.sys_I18n.text('Please left-click 3 or more contour points'), 'info', 3);
 				console.warn(TAG, `Start command received, gap=${cmd.gap}`);
 
 				currentGap = cmd.gap || 0;
@@ -201,7 +201,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 
 		// 步骤1: 没有选中任何图元
 		if (selectedPrimitives.length === 0) {
-			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'info', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Please select a silkscreen fill area and retry'), 'info', 3);
 			return false;
 		}
 
@@ -242,7 +242,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 
 		// 步骤2: 没有找到填充
 		if (!selectedFill) {
-			eda.sys_Message.showToastMessage('请选中丝印层填充区域再重试', 'info', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Please select a silkscreen fill area and retry'), 'info', 3);
 			return false;
 		}
 
@@ -251,14 +251,14 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		// 转换为 Point[]
 		const fillPoints = sourceArrayToPoints(polygonSourceArray!);
 		if (fillPoints.length < 3) {
-			eda.sys_Message.showToastMessage('填充区域几何数据无效', 'warning', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Invalid fill area geometry data'), 'warning', 3);
 			return false;
 		}
 
 		console.warn(TAG, 'handleFillAvoid: Fill has', fillPoints.length, 'polygon points');
 
 		// 检测通过，开始处理
-		eda.sys_Message.showToastMessage('正在处理填充避让...', 'info', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Processing fill avoidance...'), 'info', 3);
 
 		// 收集障碍物（使用选中填充的层）
 		const tc0 = Date.now();
@@ -300,7 +300,7 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		}
 
 		// 创建新填充
-		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Creating fill...'), 'info', 3);
 		let created = 0;
 		for (const outer of pipelineResult.outers) {
 			try {
@@ -318,12 +318,12 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
 		console.warn(TAG, 'handleFillAvoid: Created', created, 'fill(s)');
 		const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
 		console.warn(TAG, `[perf] 填充避让总耗时: ${totalTime}s`);
-		eda.sys_Message.showToastMessage(`填充避让完成，耗时 ${totalTime}s`, 'info', 5);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Fill avoidance completed in ${1}s', undefined, undefined, totalTime), 'info', 5);
 		return created > 0;
 	}
 	catch (e) {
 		console.error(TAG, 'handleFillAvoid failed:', e);
-		eda.sys_Message.showToastMessage('错误: ' + (e instanceof Error ? e.message : String(e)), 'error', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: ${1}', undefined, undefined, e instanceof Error ? e.message : String(e)), 'error', 3);
 		return false;
 	}
 }
@@ -333,14 +333,14 @@ async function handleFillAvoid(gap: number, options: ObstacleOptions): Promise<b
  */
 async function finishCurrentPolygon(): Promise<boolean> {
 	if (currentPoints.length < 3) {
-		eda.sys_Message.showToastMessage('至少需要3个点才能完成多边形', 'warning', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('At least 3 points are required to complete the polygon'), 'warning', 3);
 		return false;
 	}
 
 	const points = [...currentPoints];
 	currentPoints = [];
 
-	eda.sys_Message.showToastMessage('正在收集障碍物...', 'info', 3);
+	eda.sys_Message.showToastMessage(eda.sys_I18n.text('Collecting obstacles...'), 'info', 3);
 
 	try {
 		// 1. 创建临时填充（用户绘制的原始多边形）
@@ -348,7 +348,7 @@ async function finishCurrentPolygon(): Promise<boolean> {
 		const outerSource = pointsToSourceArray(outerPoints);
 		const tempComplex = eda.pcb_MathPolygon.createComplexPolygon([outerSource] as any);
 		if (!tempComplex) {
-			eda.sys_Message.showToastMessage('错误: 无法构建多边形', 'error', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: Unable to build polygon'), 'error', 3);
 			return false;
 		}
 
@@ -362,7 +362,7 @@ async function finishCurrentPolygon(): Promise<boolean> {
 		);
 
 		if (!tempFill) {
-			eda.sys_Message.showToastMessage('错误: 无法创建绘制区域', 'error', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: Unable to create drawing area'), 'error', 3);
 			return false;
 		}
 
@@ -376,14 +376,14 @@ async function finishCurrentPolygon(): Promise<boolean> {
 		await deleteTempFill();
 
 		if (!success) {
-			eda.sys_Message.showToastMessage('创建失败，请重试', 'warning', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Creation failed, please retry'), 'warning', 3);
 		}
 		return success;
 	}
 	catch (e) {
 		console.error(TAG, 'Failed to finish polygon:', e);
 		await deleteTempFill();
-		eda.sys_Message.showToastMessage(`错误: ${e instanceof Error ? e.message : String(e)}`, 'error', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: ${1}', undefined, undefined, e instanceof Error ? e.message : String(e)), 'error', 3);
 		return false;
 	}
 }
@@ -574,13 +574,13 @@ async function collectAllObstacles(layer: number, options: ObstacleOptions, gap:
 async function processPolygonFill(userPoints: Point[], gap: number): Promise<boolean> {
 	const startTime = Date.now();
 	if (userPoints.length < 3) {
-		eda.sys_Message.showToastMessage('错误: 至少需要3个点', 'error', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: At least 3 points required'), 'error', 3);
 		return false;
 	}
 
 	try {
 		// 步骤 1-2：收集障碍物
-		eda.sys_Message.showToastMessage('正在收集障碍物...', 'info', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Collecting obstacles...'), 'info', 3);
 		const allObstacles = await collectAllObstacles(targetLayer, currentOptions, gap);
 
 		// 转换为 Point[] 用于后续处理，保留旋转角度用于外扩
@@ -609,12 +609,12 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			const outerSource = pointsToSourceArray(outerPoints);
 			const complex = eda.pcb_MathPolygon.createComplexPolygon([outerSource] as any);
 			if (!complex) {
-				eda.sys_Message.showToastMessage('错误: 无法构建多边形', 'error', 3);
+				eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: Unable to build polygon'), 'error', 3);
 				return false;
 			}
 			const fill = await eda.pcb_PrimitiveFill.create(targetLayer as any, complex, '', undefined, 10, false);
 			if (!fill) {
-				eda.sys_Message.showToastMessage('错误: 无法创建填充', 'error', 3);
+				eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: Unable to create fill'), 'error', 3);
 				return false;
 			}
 			fillCount++;
@@ -628,7 +628,7 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 			userRegionCW, obstaclePoints, obstacleRotations, obstacleNegateBisector, obstacleExtraGaps, gap,
 		);
 
-		eda.sys_Message.showToastMessage('正在创建填充...', 'info', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Creating fill...'), 'info', 3);
 		let created = 0;
 		for (const outer of outers) {
 			try {
@@ -644,20 +644,20 @@ async function processPolygonFill(userPoints: Point[], gap: number): Promise<boo
 		}
 
 		if (created === 0) {
-			eda.sys_Message.showToastMessage('错误: 无法创建填充', 'error', 3);
+			eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: Unable to create fill'), 'error', 3);
 			return false;
 		}
 
 		console.warn(TAG, `Created ${created} fill(s), total: ${fillCount}`);
 		const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
 		console.warn(TAG, `[perf] 填充总耗时: ${totalTime}s`);
-		eda.sys_Message.showToastMessage(`填充完成，耗时 ${totalTime}s`, 'info', 5);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Fill completed in ${1}s', undefined, undefined, totalTime), 'info', 5);
 		sendStatus('done', { count: fillCount });
 		return true;
 	}
 	catch (e) {
 		console.error(TAG, 'Failed to create fill:', e);
-		eda.sys_Message.showToastMessage(`错误: ${e instanceof Error ? e.message : String(e)}`, 'error', 3);
+		eda.sys_Message.showToastMessage(eda.sys_I18n.text('Error: ${1}', undefined, undefined, e instanceof Error ? e.message : String(e)), 'error', 3);
 		return false;
 	}
 }
@@ -706,16 +706,16 @@ async function processObstaclePipeline(
 	const dummyMeta = aabbFiltered.map(() => ({ rotation: 0, negateBisector: false, extraGap: 0 }));
 	const clipped = await clipObstaclesToRegionWithMeta(
 		aabbFiltered, dummyMeta, regionCW,
-		(done, total) => eda.sys_Message.showToastMessage(`正在裁剪障碍物... (${done}/${total})`, "info", 3),
+		(done, total) => eda.sys_Message.showToastMessage(eda.sys_I18n.text('Clipping obstacles... (${1}/${2})', undefined, undefined, done, total), "info", 3),
 	);
 	const clippedHoles = clipped.map(c => c.points);
 	const t3 = Date.now();
 	console.warn(TAG, `[perf] Clip: ${aabbFiltered.length} → ${clippedHoles.length} in ${((t3 - t2) / 1000).toFixed(1)}s`);
 
 	// Step 4: Union overlapping holes
-	eda.sys_Message.showToastMessage("正在合并洞...", "info", 3);
+	eda.sys_Message.showToastMessage(eda.sys_I18n.text('Merging holes...'), "info", 3);
 	const mergedHoles = await unionAllHoles(clippedHoles,
-		(done, total) => eda.sys_Message.showToastMessage(`正在合并洞... (${done}/${total})`, "info", 3),
+		(done, total) => eda.sys_Message.showToastMessage(eda.sys_I18n.text('Merging holes... (${1}/${2})', undefined, undefined, done, total), "info", 3),
 	);
 	const t4 = Date.now();
 	console.warn(TAG, `[perf] Union holes: ${clippedHoles.length} → ${mergedHoles.length} in ${((t4 - t3) / 1000).toFixed(1)}s`);
@@ -775,7 +775,7 @@ export async function drawDynamicFill(): Promise<void> {
 	try {
 		const docInfo = await eda.dmt_SelectControl.getCurrentDocumentInfo();
 		if (!docInfo || docInfo.documentType !== 3) {
-			eda.sys_Dialog.showInformationMessage('请在PCB文档中使用此功能', '错误');
+			eda.sys_Dialog.showInformationMessage(eda.sys_I18n.text('Please use this feature in a PCB document'), eda.sys_I18n.text('Error'));
 			return;
 		}
 
@@ -787,7 +787,7 @@ export async function drawDynamicFill(): Promise<void> {
 			320,
 			IFRAME_ID,
 			{
-				title: '动态丝印填充',
+				title: eda.sys_I18n.text('Dynamic Silkscreen Fill'),
 				minimizeButton: true,
 				buttonCallbackFn: (button: string) => {
 					if (button === 'close') {
